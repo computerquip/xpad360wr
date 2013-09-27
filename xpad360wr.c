@@ -9,52 +9,53 @@ MODULE_LICENSE("GPL");
 /* We shouldn't have to query the device for these things.*/
 #define MAX_PACKET_SIZE 32
 
-static struct usb_device_id xpad360wa_table[] = {
+static struct usb_device_id xpad360wr_table[] = {
 	{ USB_DEVICE(0x045e /* Microsoft */, 0x0719)},
 	{}
 };
 
-MODULE_DEVICE_TABLE(usb, xpad360wa_table);
+MODULE_DEVICE_TABLE(usb, xpad360wr_table);
 
-struct xpad360wa_buffer {
-	dma_addr_t *dma; /**/
+struct xpad360wr_buffer {
+	dma_addr_t dma; /**/
 	void * buffer;
 };
 
-struct xpad360wa_controller {
+struct xpad360wr_controller {
 	struct usb_interface *usbdev;
 	bool present;
 
-	struct xpad360wa_buffer ep_in;
-	struct xpad360wa_buffer ep_out;
+	struct xpad360wr_buffer ep_in;
+	struct xpad360wr_buffer ep_out;
 };
 
-struct xpad360wa_headset {
+struct xpad360wr_headset {
 	/* Nothing, I don't have one to test with. */
 };
 
-struct xpad360wa_adapter {
-	struct xpad360wa_controller controllers[4]; /* Physical limitation of 4 controllers */
-	struct xpad360wa_headset headsets[4];
+struct xpad360wr_adapter {
+	struct xpad360wr_controller controllers[4]; /* Physical limitation of 4 controllers */
+	struct xpad360wr_headset headsets[4];
 };
 
-static struct xpad360wa_adapter g_Adapter;
+static struct xpad360wr_adapter g_Adapter;
 
-int xpad360wa_probe(struct usb_interface *interface, const struct usb_device_id *id) {
+int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id *id) {
 	struct usb_device * usbdev = interface_to_usbdev(interface);
 	u8 num_controller = 0;
 
 	{
 		const u8 num_interface = interface->cur_altsetting->desc.bInterfaceNumber;
 		/* Surely there's a way to simplify the above? */
+		printk("Probing interface #%i\n", num_interface);
 
 		if ((num_interface % 2) != 1)
-			return -1;
+			return -2;
 
 		num_controller = (num_interface + 1) / 2;
 
 		if (num_controller == 0)
-			return -1;
+			return -3;
 	}
 
 	g_Adapter.controllers[num_controller].ep_in.buffer = 
@@ -62,40 +63,40 @@ int xpad360wa_probe(struct usb_interface *interface, const struct usb_device_id 
 		usbdev, 
 		MAX_PACKET_SIZE, 
 		GFP_KERNEL, 
-		g_Adapter.controllers[num_controller].ep_in.dma
+		&(g_Adapter.controllers[num_controller-1].ep_in.dma)
 	);
 
-	printk("Controller #%i Connected. - xpad360wa", num_controller);
+	printk("Controller #%i Connected. - xpad360wr\n", num_controller);
 
-	return 0;
+	return 0
+;}
+
+void xpad360wr_disconnect(struct usb_interface* interface) {
+
 }
 
-void xpad360wa_disconnect(struct usb_interface* interface) {
-
-}
-
-static struct usb_driver xpad360wa_driver = {
-	.name		= "xpad360wa",
-	.probe		= xpad360wa_probe,
-	.disconnect	= xpad360wa_disconnect,
-	.id_table	= xpad360wa_table,
+static struct usb_driver xpad360wr_driver = {
+	.name		= "xpad360wr",
+	.probe		= xpad360wr_probe,
+	.disconnect	= xpad360wr_disconnect,
+	.id_table	= xpad360wr_table,
 };
 
 
-static int __init xpad360wa_init( void ) {
+static int __init xpad360wr_init( void ) {
 	int err = 0;
 
-	err = usb_register(&xpad360wa_driver);
+	err = usb_register(&xpad360wr_driver);
 	if (err)
 		return err;
 
-	printk("xpad360wa in da house!");
+	printk("xpad360wr in da house!\n");
 	return err;
 }
 
-static void __exit xpad360wa_exit( void ) {
-	usb_deregister(&xpad360wa_driver);
+static void __exit xpad360wr_exit( void ) {
+	usb_deregister(&xpad360wr_driver);
 }
 
-module_init(xpad360wa_init);
-module_exit(xpad360wa_exit);
+module_init(xpad360wr_init);
+module_exit(xpad360wr_exit);
