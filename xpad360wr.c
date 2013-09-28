@@ -44,7 +44,7 @@ struct xpad360wr_adapter {
 /* TODO: Check for, and prevent, potential data races */
 static struct xpad360wr_adapter g_Adapter;
 
-static void xpad360wr_irq_in(struct urb *urb){
+static void xpad360wr_irq_receive(struct urb *urb){
 	switch (urb->status){ 
 		case 0: break;
 		case -ECONNRESET:
@@ -62,9 +62,9 @@ static void xpad360wr_irq_in(struct urb *urb){
 
 int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id *id) {
 	struct usb_device * usbdev = interface_to_usbdev(interface);
-	usb_endpoint_descriptor *usbep = &(interface->cur_altsetting->endpoint[0].desc);
+	struct usb_endpoint_descriptor *usbep = &(interface->cur_altsetting->endpoint[0].desc);
 
-	xpad360wr_controller *controller;
+	struct xpad360wr_controller *controller;
 	int error;
 
 	{
@@ -96,29 +96,29 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 		goto fail0;
 	}
 
-	if (!controller->irq_in = usb_alloc_urb(0, GFP_KERNEL)){
+	if (!(controller->irq_in = usb_alloc_urb(0, GFP_KERNEL))) {
 		error = -ENOMEM;
 		goto fail1;
 	}
 
-
-	if (!controller->irq_out = usb_alloc_urb(0, GFP_KERNEL){
+/*
+	if (!(controller->irq_out = usb_alloc_urb(0, GFP_KERNEL))) {
 		error = -ENOMEM;
 		got fail2;
 	}
-
+*/
 
 	usb_fill_int_urb(
 		controller->irq_in, usbdev,
-		usbrcvintpipe(usbdev, usbep->bEndpointAddress),
+		usb_rcvintpipe(usbdev, usbep->bEndpointAddress),
 		controller->ep_in.buffer, MAX_PACKET_SIZE, xpad360wr_irq_receive,
 		NULL, usbep->bInterval /* Needs encoding which is why I don't just use 1 */
 	);
 
 	usb_submit_urb(controller->irq_in, GFP_KERNEL);
 
-	free2:
-		usb_free_urb(controller->irq_in);
+	//free2:
+		//usb_free_urb(controller->irq_in);
 	fail1: 
 		usb_free_coherent(
 			usbdev,
