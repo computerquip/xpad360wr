@@ -57,6 +57,8 @@ static void xpad360wr_irq_receive(struct urb *urb){
 			break;
 	}
 
+	printk("")
+
 	usb_submit_urb(urb, GFP_ATOMIC);
 }
 
@@ -93,7 +95,6 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 
 	if (!controller->ep_in.buffer){
 		error = -ENOMEM;
-		printk("Problem 0!");
 		goto fail0;
 	}
 
@@ -101,14 +102,13 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 
 	if (!controller->irq_in) {
 		error = -ENOMEM;
-		printk("Problem 1!");
 		goto fail1;
 	}
 
 /*
 	if (!(controller->irq_out = usb_alloc_urb(0, GFP_KERNEL))) {
 		error = -ENOMEM;
-		got fail2;
+		got fail2;return
 	}
 */
 
@@ -119,12 +119,15 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 		NULL, usbep->bInterval /* Needs encoding which is why I don't just use 1 */
 	);
 
-	usb_submit_urb(controller->irq_in, GFP_KERNEL);
+	if (!usb_submit_urb(controller->irq_in, GFP_KERNEL)) {
+		printk("usb_submit_urb(controller->irq_in) failed!");
+		goto fail 2;
+	}
 
-	goto fail0;
+	return 0;
 
-	//free2:
-		//usb_free_urb(controller->irq_in);
+	free2:
+		usb_free_urb(controller->irq_in);
 	fail1: 
 		usb_free_coherent(
 			usbdev,
@@ -140,7 +143,9 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 void xpad360wr_disconnect(struct usb_interface* interface) {
 	struct usb_device * usbdev = interface_to_usbdev(interface);
 	const u8 num_interface = interface->cur_altsetting->desc.bInterfaceNumber;
-	u8 num_controller = (num_interface + 1) / 2;
+	struct xpad360wr_controller *controller = &(g_Adapter.controllers[((num_interface + 1) / 2) - 1]);
+
+	usb_free_urb(controller->irq_in);
 
 	usb_free_coherent(
 		usbdev,
