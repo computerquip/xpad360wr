@@ -93,6 +93,7 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 
 	if (!controller->ep_in.buffer){
 		error = -ENOMEM;
+		printk("Problem 0!");
 		goto fail0;
 	}
 
@@ -100,6 +101,7 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 
 	if (!controller->irq_in) {
 		error = -ENOMEM;
+		printk("Problem 1!");
 		goto fail1;
 	}
 
