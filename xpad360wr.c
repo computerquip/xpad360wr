@@ -96,7 +96,9 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 		goto fail0;
 	}
 
-	if (!(controller->irq_in = usb_alloc_urb(0, GFP_KERNEL))) {
+	controller->irq_in = usb_alloc_urb(0, GFP_KERNEL);
+
+	if (!controller->irq_in) {
 		error = -ENOMEM;
 		goto fail1;
 	}
@@ -116,6 +118,8 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 	);
 
 	usb_submit_urb(controller->irq_in, GFP_KERNEL);
+
+	goto fail0;
 
 	//free2:
 		//usb_free_urb(controller->irq_in);
