@@ -27,6 +27,9 @@ struct xpad360wr_controller {
 
 	struct xpad360wr_buffer ep_in;
 	struct xpad360wr_buffer ep_out;
+
+	struct urb *irq_in;
+	struct urb *irq_out;
 };
 
 struct xpad360wr_headset {
@@ -38,41 +41,81 @@ struct xpad360wr_adapter {
 	struct xpad360wr_headset headsets[4];
 };
 
+/* TODO: Check for, and prevent, potential data races */
 static struct xpad360wr_adapter g_Adapter;
 
 int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id *id) {
 	struct usb_device * usbdev = interface_to_usbdev(interface);
-	u8 num_controller = 0;
+	xpad360wr_controller *controller;
+	int error;
 
 	{
 		const u8 num_interface = interface->cur_altsetting->desc.bInterfaceNumber;
 		/* Surely there's a way to simplify the above? */
 		printk("Probing interface #%i\n", num_interface);
 
+		/* All odd number interfaces are headsets which we don't handle. */
 		if ((num_interface % 2) != 1)
-			return -2;
+			return -1;
 
-		num_controller = (num_interface + 1) / 2;
-
-		if (num_controller == 0)
-			return -3;
+		controller = &(g_Adapter.controllers[((num_interface + 1) / 2) - 1]);
+		printk("Controller #%i Connected\n", (num_interface + 1) / 2);
 	}
 
-	g_Adapter.controllers[num_controller].ep_in.buffer = 
+	/*
+		Initialize input buffer for this controller
+	 */
+	controller->ep_in.buffer = 
 	usb_alloc_coherent(
 		usbdev, 
 		MAX_PACKET_SIZE, 
 		GFP_KERNEL, 
-		&(g_Adapter.controllers[num_controller-1].ep_in.dma)
+		&(controller->ep_in.dma)
 	);
 
-	printk("Controller #%i Connected. - xpad360wr\n", num_controller);
+	if (!controller->ep_in.buffer){
+		error = -ENOMEM;
+		goto fail0;
+	}
 
-	return 0
+	if (!controller->irq_in = usb_alloc_urb(0, GFP_KERNEL)){
+		error = -ENOMEM;
+		goto fail1;
+	}
+
+
+	if (!controller->irq_out = usb_alloc_urb(0, GFP_KERNEL){
+		error = -ENOMEM;
+		got fail2;
+	}
+
+	if ()
+
+	free2:
+		usb_free_urb(controller->irq_in);
+	fail1: 
+		usb_free_coherent(
+			usbdev,
+			MAX_PACKET_SIZE,
+			controller->ep_in.buffer,
+			controller->ep_in.dma
+		);
+
+	fail0:
+		return error;
 ;}
 
 void xpad360wr_disconnect(struct usb_interface* interface) {
+	struct usb_device * usbdev = interface_to_usbdev(interface);
+	const u8 num_interface = interface->cur_altsetting->desc.bInterfaceNumber;
+	u8 num_controller = (num_interface + 1) / 2;
 
+	usb_free_coherent(
+		usbdev,
+		MAX_PACKET_SIZE,
+		g_Adapter.controllers[num_controller-1].ep_in.buffer,
+		g_Adapter.controllers[num_controller-1].ep_in.dma
+	);
 }
 
 static struct usb_driver xpad360wr_driver = {
