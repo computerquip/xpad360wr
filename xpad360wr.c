@@ -21,6 +21,8 @@ struct xpad360wr_headset {
 };
 
 struct xpad360wr_controller {
+	u8 num_controller;
+
 	struct input_dev *inputdev; /* input subsystem device */
 	struct usb_interface *usbdev; /* usb subsystem device */
 	bool present;
@@ -65,19 +67,32 @@ static void xpad360wr_irq_send(struct urb *urb){
 }
 
 static void xpad360wr_irq_receive(struct urb *urb){
+	struct xpad360wr_controller *controller = urb->context;
+
 	switch (urb->status){ 
 		case 0: break;
 		case -ECONNRESET:
-		case -ENOENT:
+			printk("Controller connection was reset.");
+			return;
 		case -ESHUTDOWN:
-			printk("Invalid status returned from %s\n", __FUNCTION__);
+			printk("Connection has shutdown...");
 			return;
 		default:
 			printk("Unknown status returned from %s\n", __FUNCTION__);
-			break;
+			return;
 	}
 
-	printk("Stub for IRQ IN packets.");
+	/* 	At this point, we receive a valid packet with normal status.
+		We parse the packet and push into corresponding events.
+	 */
+	{
+		int i = 0;
+		printk("Controller #%i received: ", controller->num_controller);
+		for (; i < MAX_PACKET_SIZE; ++i) {
+			printk("%x ", ((unsigned int*)controller->ep_in.buffer)[i]);
+		}
+		printk("\n");
+	}
 
 	usb_submit_urb(urb, GFP_ATOMIC);
 }
@@ -90,28 +105,24 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 
 	{
 		const u8 num_interface = interface->cur_altsetting->desc.bInterfaceNumber;
+
 		/* Surely there's a way to simplify the above? */
 		printk("Probing interface #%i\n", num_interface);
 
-		/* All even number interfaces are headsets which we don't handle. */
-		if ((num_interface % 2) != 1)
+
+		if (num_interface % 2 == 1)
 			return -1;
 
 		printk("Controller #%i Connected\n", (num_interface + 1) / 2);
+		controller->num_controller = (num_interface + 1) / 2;
 	}
 
-	/* 
-		Allocate input subsystem device
-	*/
 	controller->inputdev = input_allocate_device();
 	if (controller->inputdev == NULL) {
 		error = -ENOMEM;
 		goto fail0;
 	}
 
-	/*
-		Initialize input buffer for this controller
-	 */
 	controller->ep_in.buffer = 
 	usb_alloc_coherent(
 		usbdev, 
@@ -125,9 +136,6 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 		goto fail0;
 	}
 
-	/*
-		Allocate URB (USB Request Block)
-	 */
 	controller->irq_in = usb_alloc_urb(0, GFP_KERNEL);
 
 	if (!controller->irq_in) {
@@ -138,12 +146,15 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 	/* 
 		Initialize input device with usb device
 	 */
+
+#if 1
 	usb_make_path(usbdev, controller->path, sizeof(controller->path));
 	controller->inputdev->name = "Xbox 360 Wireless Receiver"; /* HARD CODED, OMG, FIX */
 	controller->inputdev->phys = controller->path; /* Probably more issues here... */
 	controller->inputdev->dev.parent = &(interface->dev);
 	controller->inputdev->open = xpad360wr_controller_open;
 	controller->inputdev->close = xpad360wr_controller_close;
+#endif
 
 	input_set_drvdata(controller->inputdev, controller);
 	usb_set_intfdata(interface, controller);
@@ -164,7 +175,7 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 		|= URB_NO_TRANSFER_DMA_MAP;
 
 	/*
-		Now we begin the same as above except for out.
+		Now we begin the same as above except for out interrupt endpoints
 	 */
 	usbep = &(interface->cur_altsetting->endpoint[1].desc);
 
@@ -195,21 +206,26 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 		controller, usbep->bInterval
 	);
 
-	/*
-		Controller immediately sends us stuff. 
-		I cannot figure out what xpad driver is doing... 
-	 */
-	/*
-		Submit URB. This should complete and call our callback (xpad360wr_irq_recieve)
-	 */
+	controller->irq_out->transfer_dma = controller->ep_out.dma;
+	controller->irq_out->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
+
+	/* Now that we're setup, register input device.... */
+	error = input_register_device(controller->inputdev);
+	if (error) {
+		printk("input_register_device() failed!");
+		goto fail4;
+	}
+
 	controller->irq_in->dev = usbdev;
 	error = usb_submit_urb(controller->irq_in, GFP_KERNEL);
 	if (error != 0) {
 		printk("usb_submit_urb(controller->irq_in) failed!\n");
-		goto fail4;
+		goto fail5;
 	}
 
 	return 0;
+	fail5:
+		input_unregister_device(controller->inputdev);
 	fail4:
 		usb_free_urb(controller->irq_out);
 	fail3:
