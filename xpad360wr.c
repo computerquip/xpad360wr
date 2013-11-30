@@ -68,31 +68,41 @@ static void xpad360wr_irq_send(struct urb *urb){
 
 static void xpad360wr_irq_receive(struct urb *urb){
 	struct xpad360wr_controller *controller = urb->context;
+	unsigned char* data = controller->ep_in.buffer;
 
 	switch (urb->status){ 
 		case 0: break;
 		case -ECONNRESET:
-			printk("Controller connection was reset.");
+			printk("Controller #%i was reset.", controller->num_controller);
 			return;
 		case -ESHUTDOWN:
-			printk("Connection has shutdown...");
+			printk("Controller #%i has shutdown.", controller->num_controller);
 			return;
 		default:
-			printk("Unknown status returned from %s\n", __FUNCTION__);
+			printk("Unknown status returned by controller #%i.", controller->num_controller);
 			return;
 	}
 
 	/* 	At this point, we receive a valid packet with normal status.
 		We parse the packet and push into corresponding events.
+		This is the most difficult part since it's all reverse engineered.
+		References for this code go to original xpad driver and xboxdrv, the userspace driver. 
+		I found other online references incorrect so I have not used them and will not be listed.
 	 */
-	{
-		int i = 0;
-		printk("Controller #%i received: ", controller->num_controller);
-		for (; i < MAX_PACKET_SIZE; ++i) {
-			printk("%x ", ((unsigned int*)controller->ep_in.buffer)[i]);
+	
+	switch (urb->actual_length) {
+	case 2:
+		if (data[0] == 0x08) {
+			if (data[1] == 0x80) {
+				printk("Controller #%i has connected!\n", controller->num_controller);
+			} else if (data[1] == 0x00) {
+				printk("Controller #%i has disconnected!\n", controller->num_controller);
+			}
 		}
-		printk("\n");
-	}
+		break;
+	default: 
+		printk("Message of size %i recieved. Cannot handle it.\n", urb->actual_length);
+	}	
 
 	usb_submit_urb(urb, GFP_ATOMIC);
 }
@@ -113,7 +123,6 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 		if (num_interface % 2 == 1)
 			return -1;
 
-		printk("Controller #%i Connected\n", (num_interface + 1) / 2);
 		controller->num_controller = (num_interface + 1) / 2;
 	}
 
