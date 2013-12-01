@@ -38,9 +38,10 @@ LED status definitions (in the form of an enum):
 	The xpad driver incorrectly parses various packets, I used it more as a reference for driver structure. 
 	There is no need for a mutex as the driver is designed to have no possible data races (tell me if you find one please).
 	It is near impossible to set LED status before module completely unloads. I've spent hours trying to fix this... 
+	There is no way to determine whether a controller is already connected on module load that we know of... perhaps somewhere in the packets.
 	
    TODO: 
-	I need to figure out how to dynamically add and remove input devices... since all devices are listed despite them possibly not being available. 
+	I need to figure out what the rest of these damn packets do...
 */
 struct xpad360wr_buffer {
 	dma_addr_t dma; /*  */
@@ -91,13 +92,19 @@ static void xpad360wr_controller_set_led(struct xpad360wr_controller *controller
 }
 
 static int xpad360wr_controller_open(struct input_dev* dev) {
-	printk("xpad360wr_controller_open() called!\n");
-
+	struct xpad360wr_controller *controller = input_get_drvdata(dev);
+	printk("Controller #%i has been opened.\n", controller->num_controller);
+	if (controller->present == false) {/* Not actually there, despite being properly probed and available */
+		printk("Controller isn't present, returning -1.\n");
+		return -1;
+	}
+	
 	return 0;
 }
 
 static void xpad360wr_controller_close(struct input_dev* dev) {
-	printk("xpad360wr_controller_closed() called!\n");
+	struct xpad360wr_controller *controller = input_get_drvdata(dev);
+	printk("Controller #%i has been closed.\n", controller->num_controller);
 }
 
 static void xpad360wr_irq_send(struct urb *urb){
@@ -197,7 +204,7 @@ static void xpad360wr_irq_receive(struct urb *urb){
 				break;
 				
 			/* Event report */
-			case 0x000100F0:				
+ 			case 0x000100F0:
 				/* I'm not sure what data[4] and data[5]*/
 				
 				/* Mostly from xpad driver */
@@ -236,7 +243,12 @@ static void xpad360wr_irq_receive(struct urb *urb){
 					
 				break;
 				
-			/* Signifies a complete report. */
+			/*
+			 * This isn't used in xboxdrv. 
+			 * It's sent after every button press.
+			 * It's sent after a certain amount of time if not a button press. 
+			 * If not a button press and a lot of events have passed, there appears to be a maximum amount allowed before this is sent. 
+			 */
 			case 0x000000F0: 
 				input_sync(dev);
 				break;
