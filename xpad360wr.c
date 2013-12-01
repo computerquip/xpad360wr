@@ -3,6 +3,10 @@
 #include <linux/slab.h>
 #include <linux/usb/input.h>
 
+/* 
+	Probably about 85% credit goes to xboxdrv and xpad driver.
+ */
+
 MODULE_AUTHOR("Zachary Lund <admin@computerquip.com>");
 MODULE_DESCRIPTION("Xbox 360 Wireless Adapter");
 MODULE_LICENSE("GPL");
