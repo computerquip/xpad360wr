@@ -33,6 +33,7 @@ LED status definitions (in the form of an enum):
 	I need to figure out what the rest of these damn packets do.
 	Force Feedback
 	Get userspace interface working.
+	Figure out how to remove capability from evbit (before input registration that is) in the case partial functionality fails for whatever reason. 
 */
 struct xpad360wr_buffer {
     dma_addr_t dma; /*  */
@@ -81,6 +82,38 @@ static void xpad360wr_controller_set_led(struct xpad360wr_controller *controller
 
     controller->irq_out->transfer_buffer_length = 10;
     usb_submit_urb(controller->irq_out, GFP_ATOMIC);
+}
+
+/* Force Feedback Play Effect */
+static void xpad360wr_controller_play_effect(struct input_dev *dev, void *context, struct ff_effect *effect) {
+	struct xpad360wr_controller *controller = context;
+	u8 *data = controller->ep_out.buffer;
+	
+	switch (effect->type){
+	case FF_RUMBLE:
+		u16 strong = effect->u.rumble.strong_magnitude;
+		/* 	We don't use weak magnitude.
+			While the controller has two motors, there's one for each hand, both being as powerful as the other. 
+			So we just use strong magnitude as the "main" magnitude. 
+		 */
+		
+		/* Verbatim xboxdrv */
+		data[0] = 0x00;
+		data[1] = 0x01;
+		data[2] = 0x0F;
+		data[3] = 0xC0;
+		data[4] = 0x00;
+		data[5] = strong / 256; /* Left */
+		data[6] = strong / 256; /* Right */
+		data[7] = 0x00;
+		data[8] = 0x00;
+		data[9] = 0x00;
+		data[10] = 0x00;
+		data[11] = 0x00;
+		controller->irq_out->transfer_buffer_length = 12;
+	}
+
+	return usb_submit_urb(xpad->irq_out, GFP_ATOMIC);
 }
 
 static int xpad360wr_controller_open(struct input_dev* dev)
@@ -245,6 +278,13 @@ static void xpad360wr_irq_receive(struct urb *urb)
 			/* Herm... */
 			input_sync(dev);
             break;
+			
+		case 0x00F80100:
+		case 0x00F80200:
+			/* These are unknown. 
+			 * They alternate in time intervals, but no real obvious indication of what they mean.  
+			 */
+			break;
 
         default:
             printk("Unknown packet receieved. Length was 29, header was %#.8x\n", header);
@@ -415,25 +455,39 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
     SET_BIT(ABS_RZ);
 
 #undef SET_BIT
-
+#define SET_BIT(type) __set_bit(type, controller->inputdev->ffbit)
+	error = input_ff_create_memless(controller->inputdev, controller, xpad360wr_controller_play_effect);
+	
+	if (error) {
+		printk("input_ff_create_memless() failed!");
+		ff_destroy(controller->inputdev);
+		error = 0;
+	}
+	else {
+		controller->inputdev->evbit[0] |= BIT_MASK(EV_FF);
+		SET_BIT(FF_RUMBLE);
+	}
+	
+#undef SET_BIT
+	
     error = input_register_device(controller->inputdev);
     if (error) {
         printk("input_register_device() failed!");
-        goto fail4;
+        goto fail5;
     }
 
     controller->irq_in->dev = usbdev;
     error = usb_submit_urb(controller->irq_in, GFP_KERNEL);
     if (error != 0) {
         printk("usb_submit_urb(controller->irq_in) failed!\n");
-        goto fail5;
+        goto fail6;
     }
 
     return 0;
 
-fail5:
+fail6:
     usb_free_urb(controller->irq_out);
-fail4:
+fail5:
     input_free_device(controller->inputdev);
 fail3:
     usb_free_coherent(
