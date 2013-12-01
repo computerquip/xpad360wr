@@ -88,15 +88,15 @@ static void xpad360wr_controller_set_led(struct xpad360wr_controller *controller
 }
 
 /* Force Feedback Play Effect */
-static void xpad360wr_controller_play_effect(struct input_dev *dev, void *context, struct ff_effect *effect) {
+static int xpad360wr_controller_play_effect(struct input_dev *dev, void *context, struct ff_effect *effect) {
 	struct xpad360wr_controller *controller = context;
 	u8 *data = controller->ep_out.buffer;
 	
 	switch (effect->type){
-	case FF_RUMBLE:
+	case FF_RUMBLE: {
 		u16 strong = effect->u.rumble.strong_magnitude;
 		/* 	We don't use weak magnitude.
-			While the controller has two motors, there's one for each hand, both being as powerful as the other. 
+			While the controller has two motors, there meant to equalize between hands.
 			So we just use strong magnitude as the "main" magnitude. 
 		 */
 		
@@ -115,8 +115,9 @@ static void xpad360wr_controller_play_effect(struct input_dev *dev, void *contex
 		data[11] = 0x00;
 		controller->irq_out->transfer_buffer_length = 12;
 	}
+	}
 
-	return usb_submit_urb(xpad->irq_out, GFP_ATOMIC);
+	return usb_submit_urb(controller->irq_out, GFP_ATOMIC);
 }
 
 static int xpad360wr_controller_open(struct input_dev* dev)
@@ -315,9 +316,6 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
     {
         const u8 num_interface = interface->cur_altsetting->desc.bInterfaceNumber;
 
-        printk("Probing interface #%i\n", num_interface);
-
-
         if (num_interface % 2 == 1)
             return -1;
 
@@ -458,20 +456,26 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
     SET_BIT(ABS_RZ);
 
 #undef SET_BIT
+#if 0 /* Currently broken, causes null pointer dereference somewhere... */
 #define SET_BIT(type) __set_bit(type, controller->inputdev->ffbit)
+	
+	/* Force Feedback */
+	controller->inputdev->evbit[0] |= BIT_MASK(EV_FF);
+	SET_BIT(FF_RUMBLE);
+	
+#undef SET_BIT
+
+	
 	error = input_ff_create_memless(controller->inputdev, controller, xpad360wr_controller_play_effect);
 	
 	if (error) {
 		printk("input_ff_create_memless() failed!");
-		ff_destroy(controller->inputdev);
+		input_ff_destroy(controller->inputdev);
+		/* Remove capability so we don't fool applications */
+		__clear_bit(FF_RUMBLE, controller->inputdev->ffbit);
 		error = 0;
 	}
-	else {
-		controller->inputdev->evbit[0] |= BIT_MASK(EV_FF);
-		SET_BIT(FF_RUMBLE);
-	}
-	
-#undef SET_BIT
+#endif
 	
     error = input_register_device(controller->inputdev);
     if (error) {
@@ -516,8 +520,8 @@ fail0:
 
 void xpad360wr_disconnect(struct usb_interface* interface)
 {
-    struct usb_device * usbdev = interface_to_usbdev(interface);
     struct xpad360wr_controller *controller = usb_get_intfdata(interface);
+	struct usb_device *usbdev = controller->usbdev;
 
     printk("Controller #%i disconnected.\n", controller->num_controller);
 
