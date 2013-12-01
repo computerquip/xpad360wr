@@ -227,20 +227,18 @@ static void xpad360wr_irq_receive(struct urb *urb){
 				input_report_abs(dev, ABS_RZ, data[9]);
 				
 				/* left stick */
-				input_report_abs(dev, ABS_X, le16_to_cpup((u16*)&data[10]));
-				input_report_abs(dev, ABS_Y, le16_to_cpup((u16*)&data[12]));
+				input_report_abs(dev, ABS_X, (s16)le16_to_cpup((u16*)&data[10]));
+				input_report_abs(dev, ABS_Y, (s16)le16_to_cpup((u16*)&data[12]));
 
 				/* right stick */
-				input_report_abs(dev, ABS_RX, le16_to_cpup((u16*)&data[14]));
-				input_report_abs(dev, ABS_RY, le16_to_cpup((u16*)&data[16]));
-				
-				input_sync(dev);
-				
+				input_report_abs(dev, ABS_RX, (s16)le16_to_cpup((u16*)&data[14]));
+				input_report_abs(dev, ABS_RY, (s16)le16_to_cpup((u16*)&data[16]));
+					
 				break;
 				
 			/* Signifies a complete report. */
 			case 0x000000F0: 
-				//input_sync(dev);
+				input_sync(dev);
 				break;
 				
 			default:
