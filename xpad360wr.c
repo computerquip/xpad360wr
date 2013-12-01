@@ -28,20 +28,11 @@ LED status definitions (in the form of an enum):
 	ALTERNATING
 */
 
-/* Some Got'chyas:
-	The controller is smart.
-	It turns off after a certain amount of time.
-	It automatically sets LED status after unplugging receiver.
-	However, the driver is required to set led status after plugging it back in.
-	The receiver manages what controller is on what interface... we do not.
-	It does not matter when the controller is disconnected, we let the receiver handle the LED status on that.
-	The xpad driver incorrectly parses various packets, I used it more as a reference for driver structure.
-	There is no need for a mutex as the driver is designed to have no possible data races (tell me if you find one please).
-	It is near impossible to set LED status before module completely unloads. I've spent hours trying to fix this...
-	There is no way to determine whether a controller is already connected on module load that we know of... perhaps somewhere in the packets.
-
+/* 
    TODO:
-	I need to figure out what the rest of these damn packets do...
+	I need to figure out what the rest of these damn packets do.
+	Force Feedback
+	Get userspace interface working.
 */
 struct xpad360wr_buffer {
     dma_addr_t dma; /*  */
@@ -158,10 +149,10 @@ static void xpad360wr_irq_receive(struct urb *urb)
      */
 
     /*
-     * Notes on header integer
-     *	The header array may not be converted to an integer correctly, but that's not really the goal.
-     *  This method allows us to follow the code from xboxdrv and other documents where viable.
-     *  It's platform independent. It helps readability with USB packet sniffers and in code as well.
+		Notes on header integer
+     	The header array may not be converted to an integer correctly, but that's not really the goal.
+		This method allows us to follow the code from xboxdrv and other documents where viable.
+		It's platform independent. It helps readability with USB packet sniffers and in code as well.
      */
 
     /* Event from Wireless Receiver */
@@ -169,25 +160,26 @@ static void xpad360wr_irq_receive(struct urb *urb)
         u16 header = le16_to_cpu((data[0] << 8) | data[1]);
 
         switch (header) {
-            /* Controller disconnected */
         case 0x0800:
-            if (controller->present == true) { /* This can be false if a device is still connected to receiver before and after module load up */
-                controller->present = false;
-                printk("Controller #%i has disconnected!\n", controller->num_controller);
-            }
+			/* Controller disconnected */
+            controller->present = false;
+            printk("Controller #%i has disconnected!\n", controller->num_controller);
             break;
-            /* Controller connected */
+            
         case 0x0880:
+			/* Controller connected */
             xpad360wr_controller_set_led(controller, controller->num_controller + 2);
             controller->present = true;
             printk("Controller #%i has connected!\n", controller->num_controller);
             break;
-            /* Headset connected */
+            
         case 0x0840:
+			/* Headset connected */
             printk("Controller #%i has connected a headset!\n", controller->num_controller);
             break;
-            /* Controller with headset connect */
+     
         case 0x08C0:
+			/* Controller with headset connect */
             controller->present = true;
             printk("Controller #%i has connected with a headset!\n", controller->num_controller);
             break;
@@ -209,9 +201,9 @@ static void xpad360wr_irq_receive(struct urb *urb)
             printk("Battery Status: %i\n", data[17]);
             break;
 
-            /* Event report */
         case 0x000100F0:
-            /* I'm not sure what data[4] and data[5]*/
+			/* Event report */
+            /* I'm not sure what data[4] and data[5] are*/
 
             /* Mostly from xpad driver */
             input_report_key(dev, BTN_TRIGGER_HAPPY3, data[6] & 0x01); /* D-pad up	 */
@@ -241,30 +233,25 @@ static void xpad360wr_irq_receive(struct urb *urb)
 
             /* left stick */
             input_report_abs(dev, ABS_X, (s16)le16_to_cpup((u16*)&data[10]));
-            input_report_abs(dev, ABS_Y, (s16)le16_to_cpup((u16*)&data[12]));
+            input_report_abs(dev, ABS_Y, ~(s16)le16_to_cpup((u16*)&data[12]));
 
             /* right stick */
             input_report_abs(dev, ABS_RX, (s16)le16_to_cpup((u16*)&data[14]));
-            input_report_abs(dev, ABS_RY, (s16)le16_to_cpup((u16*)&data[16]));
+            input_report_abs(dev, ABS_RY, ~(s16)le16_to_cpup((u16*)&data[16]));
 
             break;
 
-            /*
-             * This isn't used in xboxdrv.
-             * It's sent after every button press.
-             * It's sent after a certain amount of time if not a button press.
-             * If not a button press and a lot of events have passed, there appears to be a maximum amount allowed before this is sent.
-             */
         case 0x000000F0:
-            input_sync(dev);
+			/* Herm... */
+			input_sync(dev);
             break;
 
         default:
             printk("Unknown packet receieved. Length was 29, header was %#.8x\n", header);
         }
     }
-    /* No known case of this happening. */
     else {
+		/* No known case of this happening. */
         printk("Unknown packet received. Length was %i... what about the header...?", urb->actual_length);
     }
 
