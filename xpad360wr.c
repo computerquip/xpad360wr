@@ -37,7 +37,6 @@ LED status definitions (in the form of an enum):
 	I need to figure out what the rest of these damn packets do.
 	Force Feedback
 	Get userspace interface working.
-	Figure out how to remove capability from evbit (before input registration that is) in the case partial functionality fails for whatever reason. 
 */
 struct xpad360wr_buffer {
     dma_addr_t dma; /*  */
