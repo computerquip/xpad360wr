@@ -178,44 +178,42 @@ static void xpad360wr_irq_receive(struct urb *urb)
         return;
     }
 
-    /* 	At this point, we receive a valid packet with normal status.
-    	We parse the packet and push into corresponding events.
-    	This is the most difficult part since it's all reverse engineered.
-    	References for this code go to original xpad driver and xboxdrv, the userspace driver.
-    	I found other online references incorrect so I have not used them and will not be listed.
-     */
-
-    /*
-		Notes on header integer
-     	The header array may not be converted to an integer correctly, but that's not really the goal.
-		This method allows us to follow the code from xboxdrv and other documents where viable.
-		It's platform independent. It helps readability with USB packet sniffers and in code as well.
+    /*  NOTE:
+	 * 		Some bytes sent from some controller event (specifically data[2] and data[3]) are unknown. 
+	 * 		They change on every single packet (excluding 0x0000 packets which doesn't appear to have data[2] or data[3]) 
+	 * 		However, the same numbers re appear so it does not appear to be completely random.
+	 * 		The input event is the only packet that seems to be excepted from this behavior. 
+	 * 		Regardless, they don't seem neccessary for decent functionality. Would be nice to know though. 
+	 * 
+	 * 		There are two packets, 0x02F8 and 0x01F8, that have unknown use. They alternate in when they're sent.
+	 * 		0x01F8 is always sent first with a following 0x02F8 packet. This seems to be some sort of ping mechanism. 
+	 * 		Also seems safe to ignore. 
      */
 
     /* Event from Wireless Receiver */
-    if (urb->actual_length == 2) {
+    if (data[0] == 0x08) {
         u16 header = le16_to_cpu((data[0] << 8) | data[1]);
 
-        switch (header) {
-        case 0x0800:
+        switch (data[1]) {
+        case 0x00:
 			/* Controller disconnected */
             controller->present = false;
             printk("Controller #%i has disconnected!\n", controller->num_controller);
             break;
             
-        case 0x0880:
+        case 0x80:
 			/* Controller connected */
             xpad360wr_controller_set_led(controller, controller->num_controller + 2);
             controller->present = true;
             printk("Controller #%i has connected!\n", controller->num_controller);
             break;
             
-        case 0x0840:
+        case 0x40:
 			/* Headset connected */
             printk("Controller #%i has connected a headset!\n", controller->num_controller);
             break;
      
-        case 0x08C0:
+        case 0xC0:
 			/* Controller with headset connect */
             controller->present = true;
             printk("Controller #%i has connected with a headset!\n", controller->num_controller);
@@ -225,22 +223,21 @@ static void xpad360wr_irq_receive(struct urb *urb)
         }
     }
     /* Event from Controller */
-    else if (urb->actual_length == 29) {
-        u32 header = le32_to_cpu((data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3]);
+    else if (data[0] == 0x00) {
+        u16 header = le16_to_cpup((u16*)&data[1]);
 
         switch (header) {
-            /* Announcment */
-        case 0x000F00F0:
-            printk(
-                "Serial: %i:%i:%i:%i:%i:%i:%i\n",
-                data[7], data[8], data[9], data[10], data[11], data[12], data[13]
-            );
-            printk("Battery Status: %i\n", data[17]);
-            break;
+        case 0x0000:
+			/* This packet is sent in many variants, none of which seem to mean a damn thing */
+			/* Although, hinting something is a version of this packet sent (with data[3] being 0xF0)consistently being sent after button/analog events. */
+			/* Maybe it marks the end of an event */
 
-        case 0x000100F0:
+            break;
+			
+        case 0x0001:
 			/* Event report */
-            /* I'm not sure what data[4] and data[5] are*/
+			/* data[5] is packet size including the byte itself, which we don't use */
+			/* data[18] and past are padding perhaps used with other devices. */
 
             /* Mostly from xpad driver */
             input_report_key(dev, BTN_TRIGGER_HAPPY3, data[6] & 0x01); /* D-pad up	 */
@@ -275,23 +272,43 @@ static void xpad360wr_irq_receive(struct urb *urb)
             /* right stick */
             input_report_abs(dev, ABS_RX, (s16)le16_to_cpup((u16*)&data[14]));
             input_report_abs(dev, ABS_RY, ~(s16)le16_to_cpup((u16*)&data[16]));
-
-            break;
-
-        case 0x000000F0:
-			/* Herm... */
-			input_sync(dev);
-            break;
 			
-		case 0x00F80100:
-		case 0x00F80200:
-			/* These are unknown. 
-			 * They alternate in time intervals, but no real obvious indication of what they mean.  
-			 */
-			break;
+			input_sync(dev);
+			
+            break;
 
+		/* The following two packets are for some reason sent twice... purpose? */
+		case 0x000A:
+			/* This appears to be sent when a controller attachment is connected */
+			/* The string seems to be delimited with 0xFF... 
+			 * ...that seems really stupid so hopefully the multiple 0xFF is actually something else.  */
+			{
+				int size = (strchr((char*)&data[5], 0xFF) - (char*)&data[5]);
+				printk("Controller #%i has attachment! Description: %.*s", controller->num_controller, size, (char*)&data[5]);
+			}
+			break;
+		case 0x0009:
+			/* This appears when an attachment is connected. It contains the serial barcode on the back of attachment. */
+			/* There are some characters past serial, I do not know what they do or are. */
+			printk("Attachment Serial: %.14s", (char*)&data[5]);
+			break;
+		case 0x01F8:
+		case 0x02F8:
+			break;
+        case 0x000F:
+#if 0		
+			/* First packet sent by controller when connected. */
+            printk(
+				/* This is from Xboxdrv... 
+				 * not sure the validity or indication that this is actually the serial or battery status.*/
+                "Serial: %i:%i:%i:%i:%i:%i:%i\n",
+                data[7], data[8], data[9], data[10], data[11], data[12], data[13]
+            );
+            printk("Battery Status: %i\n", data[17]);
+#endif
+            break;
         default:
-            printk("Unknown packet receieved. Length was 29, header was %#.8x\n", header);
+            printk("Unknown packet receieved. Header was %#.8x\n", header);
         }
     }
     else {
