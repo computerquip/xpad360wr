@@ -1,3 +1,5 @@
+#define DEBUG 1
+
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
@@ -12,22 +14,6 @@ MODULE_DESCRIPTION("Xbox 360 Wireless Adapter");
 MODULE_LICENSE("GPL");
 
 /* This is constant information we already know before probing device*/
-#define MAX_PACKET_SIZE 32
-
-/* I wish USB device macros were better documented... */
-static struct usb_device_id xpad360wr_table[] = {
-	{
-	.match_flags = USB_DEVICE_ID_MATCH_DEVICE | USB_DEVICE_ID_MATCH_INT_INFO,
-	.idVendor = 0x045e, /* Microsoft Corp. */
-	.idProduct = 0x0719, /* Xbox 360 Wireless Adapter */
-	/* bDevice* is 255 which isn't useful */
-	.bInterfaceClass = USB_CLASS_VENDOR_SPEC, /* 255 */
-	.bInterfaceSubClass = 93,
-	.bInterfaceProtocol = 129 /* This will only match the controllers, not the headsets! */
-	},
-	{}
-};
-
 /*
 LED status definitions (in the form of an enum):
 	OFF = 0x00,
@@ -49,16 +35,27 @@ LED status definitions (in the form of an enum):
 /* 
    TODO:
 	I need to figure out what the rest of these damn packets do.
-	Force Feedback
 	Get userspace interface working.
+	Headsets, although I will implement that in a different file when I get to it. 
 */
+#define MAX_PACKET_SIZE 32
+
+/* I wish USB device macros were better documented... */
+static struct usb_device_id xpad360wr_table[] = {
+	{
+	.match_flags = USB_DEVICE_ID_MATCH_DEVICE | USB_DEVICE_ID_MATCH_INT_INFO,
+	.idVendor = 0x045e, /* Microsoft Corp. */
+	.idProduct = 0x0719, /* Xbox 360 Wireless Adapter */
+	/* bDevice* is 255 which isn't useful */
+	.bInterfaceClass = USB_CLASS_VENDOR_SPEC, /* 255 */
+	.bInterfaceSubClass = 93,
+	.bInterfaceProtocol = 129 /* This will only match the controllers, not the headsets! */
+	},
+	{}
+};
 struct xpad360wr_buffer {
     dma_addr_t dma; /*  */
     void *buffer;
-};
-
-struct xpad360wr_headset {
-    /* Nothing, I don't have one to test with. */
 };
 
 struct xpad360wr_controller {
@@ -72,8 +69,6 @@ struct xpad360wr_controller {
 
     struct xpad360wr_buffer ep_in;
     struct xpad360wr_buffer ep_out;
-
-    struct xpad360wr_headset *headset; /* Currently nothing since I don't have a headset */
 
     struct urb *irq_in;
     struct urb *irq_out;
@@ -99,7 +94,7 @@ static void xpad360wr_controller_set_led(struct xpad360wr_controller *controller
     controller->irq_out->transfer_buffer_length = 10;
 	
 	if (usb_submit_urb(controller->irq_out, GFP_ATOMIC) != 0) {
-		printk ("usb_submit_urb() failed in set_led()!");
+		dev_dbg(&(controller->usbintf->dev), "usb_submit_urb() failed in set_led()!");
 	}
 }
 
@@ -107,8 +102,6 @@ static void xpad360wr_controller_set_led(struct xpad360wr_controller *controller
 static int xpad360wr_controller_play_effect(struct input_dev *dev, void *stuff, struct ff_effect *effect) {
 	struct xpad360wr_controller *controller = input_get_drvdata(dev);
 	u8 *data = controller->ep_out.buffer;
-	
-	
 	
 	switch (effect->type){
 	case FF_RUMBLE: {
@@ -137,7 +130,7 @@ static int xpad360wr_controller_play_effect(struct input_dev *dev, void *stuff, 
 	}
 
 	if (usb_submit_urb(controller->irq_out, GFP_ATOMIC != 0)) {
-		printk ("usb_submit_urb() failed in play_effect()!");
+		dev_dbg(&(controller->usbintf->dev), "usb_submit_urb() failed in play_effect()!");
 		return -1;
 	}
 	
@@ -148,9 +141,10 @@ static int xpad360wr_controller_open(struct input_dev* dev)
 {
     struct xpad360wr_controller *controller = input_get_drvdata(dev);
 	
+	/* We're already inquiring packets so no need to do that again. */
+	
     if (controller->present == false) {
-        printk("Controller #%i isn't present, input_open_device should return -1.\n", controller->num_controller);
-        return -1;
+        return -ENODEV; /* Is this appropriate? */
     }
 
     return 0;
@@ -164,21 +158,23 @@ static void xpad360wr_controller_close(struct input_dev* dev)
 static void xpad360wr_irq_send(struct urb *urb)
 {
     struct xpad360wr_controller *controller = urb->context;
+	struct device *device = &(controller->usbintf->dev);
 
     switch (urb->status) {
     case 0:
-        printk("Controller #%i sent message successfully!\n", controller->num_controller);
+        dev_dbg(device, "Sent message to controller successfully!");
         return;
     case -ECONNRESET:
-        printk("Controller #%i was reset.\n", controller->num_controller);
+        dev_dbg(device, "Controller has been reset.\n");
         return;
     case -ESHUTDOWN:
-        printk("Controller #%i has shutdown.\n", controller->num_controller);
+        dev_dbg(device, "Controller has shutdown.\n");
         return;
 	case -ENOENT:
-		printk("Controller #%i has been poisoned.\n", controller->num_controller);
+		dev_dbg(device, "Controller has been poisoned.\n");
+		return;
     default:
-        printk("Unknown status returned by controller #%i.\n", controller->num_controller);
+        dev_dbg(device, "Unknown status returned by controller.\n");
         return;
     }
 }
@@ -186,25 +182,26 @@ static void xpad360wr_irq_send(struct urb *urb)
 static void xpad360wr_irq_receive(struct urb *urb)
 {
     struct xpad360wr_controller *controller = urb->context;
-    struct input_dev *dev = controller->inputdev;
+    struct input_dev *inputdev = controller->inputdev;
     unsigned char* data = controller->ep_in.buffer;
+	struct device *device = &(controller->usbintf->dev);
 
     switch (urb->status) {
     case 0:
         break;
     case -ECONNRESET:
-        printk("Controller #%i was reset.\n", controller->num_controller);
+        dev_dbg(device, "Controller has been reset.\n");
         return;
     case -ESHUTDOWN:
-        printk("Controller #%i has shutdown.\n", controller->num_controller);
+        dev_dbg(device, "Controller has shutdown.\n");
         return;
 	case -ENOENT:
-		printk("Controller #%i has been poisoned.\n", controller->num_controller);
+		dev_dbg(device, "Controller has been poisoned.\n");
 		return;
     default:
-        printk("Unknown status returned by controller #%i.\n", controller->num_controller);
+        dev_dbg(device, "Unknown status returned by controller.\n");
         return;
-    }
+	}
 
     /*  NOTE:
 	 * 		Some bytes sent from some controller event (specifically data[2] and data[3]) are unknown. 
@@ -226,28 +223,28 @@ static void xpad360wr_irq_receive(struct urb *urb)
         case 0x00:
 			/* Controller disconnected */
             controller->present = false;
-            printk("Controller #%i has disconnected!\n", controller->num_controller);
+            dev_dbg(device, "Controller has been disconnected!\n");
             break;
             
         case 0x80:
 			/* Controller connected */
             xpad360wr_controller_set_led(controller, controller->num_controller + 2);
             controller->present = true;
-            printk("Controller #%i has connected!\n", controller->num_controller);
+            dev_dbg(device, "Controller has been connected!\n");
             break;
             
         case 0x40:
 			/* Headset connected */
-            printk("Controller #%i has connected a headset!\n", controller->num_controller);
+            dev_dbg(device, "Controller has connected a headset!\n");
             break;
      
         case 0xC0:
 			/* Controller with headset connect */
             controller->present = true;
-            printk("Controller #%i has connected with a headset!\n", controller->num_controller);
+            dev_dbg(device, "Controller has connected with a headset!\n");
             break;
         default:
-            printk("Unknown packet received. Length was 2, header was %#.4x\n", header);
+            dev_dbg(device, "Unknown packet received. Length was 2, header was %#.4x\n", header);
         }
     }
     /* Event from Controller */
@@ -268,40 +265,40 @@ static void xpad360wr_irq_receive(struct urb *urb)
 			/* data[18] and past are padding perhaps used with other devices. */
 
             /* Mostly from xpad driver */
-            input_report_key(dev, BTN_TRIGGER_HAPPY3, data[6] & 0x01); /* D-pad up	 */
-            input_report_key(dev, BTN_TRIGGER_HAPPY4, data[6] & 0x02); /* D-pad down */
-            input_report_key(dev, BTN_TRIGGER_HAPPY1, data[6] & 0x04); /* D-pad left */
-            input_report_key(dev, BTN_TRIGGER_HAPPY2, data[6] & 0x08); /* D-pad right */
+            input_report_key(inputdev, BTN_TRIGGER_HAPPY3, data[6] & 0x01); /* D-pad up	 */
+            input_report_key(inputdev, BTN_TRIGGER_HAPPY4, data[6] & 0x02); /* D-pad down */
+            input_report_key(inputdev, BTN_TRIGGER_HAPPY1, data[6] & 0x04); /* D-pad left */
+            input_report_key(inputdev, BTN_TRIGGER_HAPPY2, data[6] & 0x08); /* D-pad right */
 
             /* start/back buttons */
-            input_report_key(dev, BTN_START,  data[6] & 0x10);
-            input_report_key(dev, BTN_SELECT, data[6] & 0x20); /* Back */
+            input_report_key(inputdev, BTN_START,  data[6] & 0x10);
+            input_report_key(inputdev, BTN_SELECT, data[6] & 0x20); /* Back */
 
             /* stick press left/right */
-            input_report_key(dev, BTN_THUMBL, data[6] & 0x40);
-            input_report_key(dev, BTN_THUMBR, data[6] & 0x80);
+            input_report_key(inputdev, BTN_THUMBL, data[6] & 0x40);
+            input_report_key(inputdev, BTN_THUMBR, data[6] & 0x80);
 
-            input_report_key(dev, BTN_TL,	data[7] & 0x01); /* Left Shoulder */
-            input_report_key(dev, BTN_TR,	data[7] & 0x02); /* Right Shoulder */
-            input_report_key(dev, BTN_MODE,	data[7] & 0x04); /* Guide */
+            input_report_key(inputdev, BTN_TL,	data[7] & 0x01); /* Left Shoulder */
+            input_report_key(inputdev, BTN_TR,	data[7] & 0x02); /* Right Shoulder */
+            input_report_key(inputdev, BTN_MODE,	data[7] & 0x04); /* Guide */
             /* data[8] & 0x08 is a dummy value */
-            input_report_key(dev, BTN_A,	data[7] & 0x10);
-            input_report_key(dev, BTN_B,	data[7] & 0x20);
-            input_report_key(dev, BTN_X,	data[7] & 0x40);
-            input_report_key(dev, BTN_Y,	data[7] & 0x80);
+            input_report_key(inputdev, BTN_A,	data[7] & 0x10);
+            input_report_key(inputdev, BTN_B,	data[7] & 0x20);
+            input_report_key(inputdev, BTN_X,	data[7] & 0x40);
+            input_report_key(inputdev, BTN_Y,	data[7] & 0x80);
 
-            input_report_abs(dev, ABS_Z, data[8]);
-            input_report_abs(dev, ABS_RZ, data[9]);
+            input_report_abs(inputdev, ABS_Z, data[8]);
+            input_report_abs(inputdev, ABS_RZ, data[9]);
 
             /* left stick */
-            input_report_abs(dev, ABS_X, (s16)le16_to_cpup((u16*)&data[10]));
-            input_report_abs(dev, ABS_Y, ~(s16)le16_to_cpup((u16*)&data[12]));
+            input_report_abs(inputdev, ABS_X, (s16)le16_to_cpup((u16*)&data[10]));
+            input_report_abs(inputdev, ABS_Y, ~(s16)le16_to_cpup((u16*)&data[12]));
 
             /* right stick */
-            input_report_abs(dev, ABS_RX, (s16)le16_to_cpup((u16*)&data[14]));
-            input_report_abs(dev, ABS_RY, ~(s16)le16_to_cpup((u16*)&data[16]));
+            input_report_abs(inputdev, ABS_RX, (s16)le16_to_cpup((u16*)&data[14]));
+            input_report_abs(inputdev, ABS_RY, ~(s16)le16_to_cpup((u16*)&data[16]));
 			
-			input_sync(dev);
+			input_sync(inputdev);
 			
             break;
 
@@ -312,13 +309,13 @@ static void xpad360wr_irq_receive(struct urb *urb)
 			 * ...that seems really stupid so hopefully the multiple 0xFF is actually something else.  */
 			{
 				int size = (strchr((char*)&data[5], 0xFF) - (char*)&data[5]);
-				printk("Controller #%i has attachment! Description: %.*s\n", controller->num_controller, size, (char*)&data[5]);
+				dev_dbg(device, "Controller has attachment! Description: %.*s\n", size, (char*)&data[5]);
 			}
 			break;
 		case 0x0009:
 			/* This appears when an attachment is connected. It contains the serial barcode on the back of attachment. */
 			/* There are some characters past serial, I do not know what they do or are. */
-			printk("Attachment Serial: %.14s\n", (char*)&data[5]);
+			dev_dbg(device, "Attachment Serial: %.14s\n", (char*)&data[5]);
 			break;
 		case 0x01F8:
 		case 0x02F8:
@@ -326,22 +323,22 @@ static void xpad360wr_irq_receive(struct urb *urb)
         case 0x000F:
 #if 0		
 			/* First packet sent by controller when connected. */
-            printk(
+            dev_dbg(device, 
 				/* This is from Xboxdrv... 
 				 * not sure the validity or indication that this is actually the serial or battery status.*/
                 "Serial: %2x:%2x:%2x:%2x:%2x:%2x:%2x\n",
                 data[7], data[8], data[9], data[10], data[11], data[12], data[13]
             );
-            printk("Battery Status: %i\n", data[17]);
+            dev_dbg(device, "Battery Status: %i\n", data[17]);
 #endif
             break;
         default:
-            printk("Unknown packet receieved. Header was %#.8x\n", header);
+            dev_dbg(device, "Unknown packet receieved. Header was %#.8x\n", header);
         }
     }
     else {
 		/* No known case of this happening. */
-        printk("Unknown packet received. Length was %i... what about the header...?", urb->actual_length);
+        dev_dbg(device, "Unknown packet received. Length was %i... what about the header...?", urb->actual_length);
     }
 
     usb_submit_urb(urb, GFP_ATOMIC);
@@ -352,11 +349,16 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
     struct usb_device * usbdev = interface_to_usbdev(interface);
     struct usb_endpoint_descriptor *usbep = &(interface->cur_altsetting->endpoint[0].desc);
     struct xpad360wr_controller *controller = kzalloc(sizeof(struct xpad360wr_controller), GFP_KERNEL);
+	struct device *device = &(interface->dev);
+	
     int error = 0;
 	
     controller->present = false;
     controller->usbdev = usbdev;
     controller->usbintf = interface;
+	
+	/* Is this the most reliable method of fetching controller number? */
+	controller->num_controller = (interface->cur_altsetting->desc.bInterfaceNumber + 1) / 2;
 
     controller->inputdev = input_allocate_device();
     if (controller->inputdev == NULL) {
@@ -387,18 +389,15 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 
     {
         char tmp[8];
-        snprintf(tmp, sizeof(tmp), "/input%i", controller->num_controller);
+		/* Could this potentionally cause overflow? */
+        snprintf(tmp, sizeof(tmp), "/input%.1i", controller->num_controller);
         usb_make_path(usbdev, controller->path, sizeof(controller->path));
         strlcat(controller->path, tmp, sizeof(controller->path));
     }
 
-    /* Initialize input device */
-	/* Some things are hard coded... 
-	 * Any other possible vendors of the receiever...?
-	 */
-    controller->inputdev->name = "Xbox 360 Wireless Receiver";
-    controller->inputdev->phys = controller->path; /* Probably more issues here... */
-    controller->inputdev->dev.parent = &(interface->dev);
+    controller->inputdev->name = "Xbox 360 Wireless Adapter"; 	/* Programmatically fetch idProduct string? */
+    controller->inputdev->phys = controller->path; 				/* Probably more issues here... */
+    controller->inputdev->dev.parent = device; 
     controller->inputdev->open = xpad360wr_controller_open;
     controller->inputdev->close = xpad360wr_controller_close;
 
@@ -494,7 +493,7 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
     SET_BIT(ABS_RZ);
 
 #undef SET_BIT
-#if 0 /* Currently broken, causes null pointer dereference somewhere... */
+#if 1 /* Currently broken, causes null pointer dereference somewhere... */
 #define SET_BIT(type) __set_bit(type, controller->inputdev->ffbit)
 	
 	/* Force Feedback */
@@ -507,7 +506,7 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 	error = input_ff_create_memless(controller->inputdev, NULL, xpad360wr_controller_play_effect);
 	
 	if (error) {
-		printk("input_ff_create_memless() failed!\n");
+		dev_dbg(device, "input_ff_create_memless() failed!\n");
 		input_ff_destroy(controller->inputdev);
 		/* Remove capability so we don't fool applications */
 		__clear_bit(FF_RUMBLE, controller->inputdev->ffbit);
@@ -517,14 +516,14 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 	
     error = input_register_device(controller->inputdev);
     if (error) {
-        printk("input_register_device() failed!\n");
+        dev_dbg(device, "input_register_device() failed!\n");
         goto fail5;
     }
 
     controller->irq_in->dev = usbdev;
     error = usb_submit_urb(controller->irq_in, GFP_KERNEL);
     if (error) {
-        printk("usb_submit_urb(controller->irq_in) failed!\n");
+        dev_dbg(device, "usb_submit_urb(controller->irq_in) failed!\n");
         goto fail6;
     }
 
@@ -559,8 +558,9 @@ void xpad360wr_disconnect(struct usb_interface* interface)
 {
 	struct xpad360wr_controller *controller = usb_get_intfdata(interface);
 	struct usb_device *usbdev = controller->usbdev;
+	struct device *device = &(controller->usbintf->dev);
 
-    printk("Controller #%i disconnected.\n", controller->num_controller);
+    dev_dbg(device, "Controller disconnected.\n");
 	
     input_unregister_device(controller->inputdev);
 	
