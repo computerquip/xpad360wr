@@ -245,7 +245,7 @@ static void xpad360wr_irq_receive(struct urb *urb)
     }
     /* Event from Controller */
     else if (data[0] == 0x00 && urb->actual_length == 29) {
-        u16 header = le16_to_cpup((u16*)&data[1]);
+        u16 header = le16_to_cpup((__le16*)&data[1]);
 
         switch (header) {
         case 0x0000:
