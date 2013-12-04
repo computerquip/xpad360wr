@@ -507,7 +507,6 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 	
 #undef SET_BIT
 
-	/* This is created b */
 	error = input_ff_create_memless(controller->inputdev, NULL, xpad360wr_controller_play_effect);
 	
 	if (unlikely(error)) {
@@ -515,6 +514,7 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 		input_ff_destroy(controller->inputdev);
 		/* Remove capability so we don't fool applications */
 		__clear_bit(FF_RUMBLE, controller->inputdev->ffbit);
+		__clear_bit(EV_FF, controller->inputdev->evbit);
 		error = 0;
 	}
 #endif
