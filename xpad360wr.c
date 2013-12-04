@@ -93,7 +93,7 @@ static void xpad360wr_controller_set_led(struct xpad360wr_controller *controller
     data[9] = 0x00;
     controller->irq_out->transfer_buffer_length = 10;
 	
-	if (usb_submit_urb(controller->irq_out, GFP_ATOMIC) != 0) {
+	if (unlikely(usb_submit_urb(controller->irq_out, GFP_ATOMIC) != 0)) {
 		dev_dbg(&(controller->usbintf->dev), "usb_submit_urb() failed in set_led()!");
 	}
 }
@@ -103,8 +103,7 @@ static int xpad360wr_controller_play_effect(struct input_dev *dev, void *stuff, 
 	struct xpad360wr_controller *controller = input_get_drvdata(dev);
 	u8 *data = controller->ep_out.buffer;
 	
-	switch (effect->type){
-	case FF_RUMBLE: {
+	if (effect->type == FF_RUMBLE) {
 		u16 strong = effect->u.rumble.strong_magnitude;
 		u16 weak = effect->u.rumble.weak_magnitude;
 		
@@ -122,14 +121,11 @@ static int xpad360wr_controller_play_effect(struct input_dev *dev, void *stuff, 
 		data[10] = 0x00;
 		data[11] = 0x00;
 		controller->irq_out->transfer_buffer_length = 12;
-		
-		break;
 	}
-	default:
-		return -1;
-	}
+	else
+		return 1;
 
-	if (usb_submit_urb(controller->irq_out, GFP_ATOMIC != 0)) {
+	if (unlikely(usb_submit_urb(controller->irq_out, GFP_ATOMIC != 0))) {
 		dev_dbg(&(controller->usbintf->dev), "usb_submit_urb() failed in play_effect()!");
 		return -1;
 	}
@@ -140,18 +136,27 @@ static int xpad360wr_controller_play_effect(struct input_dev *dev, void *stuff, 
 static int xpad360wr_controller_open(struct input_dev* dev)
 {
     struct xpad360wr_controller *controller = input_get_drvdata(dev);
+	struct device *device = &(controller->usbintf->dev);
 	
 	/* We're already inquiring packets so no need to do that again. */
+	dev_dbg(device, "Opening controller...");
 	
     if (controller->present == false) {
+		dev_dbg(device, "failed.\n");
         return -ENODEV; /* Is this appropriate? */
     }
+    
+    dev_dbg(device, "success.\n");
 
     return 0;
 }
 
 static void xpad360wr_controller_close(struct input_dev* dev)
 {
+	struct xpad360wr_controller *controller = input_get_drvdata(dev);
+	struct device *device = &(controller->usbintf->dev);
+	
+	dev_dbg(device, "Closing controller.");
 	/* We cannot stop inquiring packets as connection packets are sent from the same interface. */
 }
 
@@ -361,7 +366,7 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 	controller->num_controller = (interface->cur_altsetting->desc.bInterfaceNumber + 1) / 2;
 
     controller->inputdev = input_allocate_device();
-    if (controller->inputdev == NULL) {
+    if (unlikely(controller->inputdev == NULL)) {
         error = -ENOMEM;
         goto fail0;
     }
@@ -375,14 +380,14 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
             &(controller->ep_in.dma)
         );
 
-    if (!controller->ep_in.buffer) {
+    if (unlikely(!controller->ep_in.buffer)) {
         error = -ENOMEM;
         goto fail0;
     }
 
     controller->irq_in = usb_alloc_urb(0, GFP_KERNEL);
 
-    if (!controller->irq_in) {
+    if (unlikely(!controller->irq_in)) {
         error = -ENOMEM;
         goto fail1;
     }
@@ -429,14 +434,14 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
             &(controller->ep_out.dma)
         );
 
-    if (!controller->ep_out.buffer) {
+    if (unlikely(!controller->ep_out.buffer)) {
         error = -ENOMEM;
         goto fail2;
     }
 
     controller->irq_out = usb_alloc_urb(0, GFP_KERNEL);
 
-    if (!controller->irq_out) {
+    if (unlikely(!controller->irq_out)) {
         error = -ENOMEM;
         goto fail3;
     }
@@ -505,7 +510,7 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 	/* This is created b */
 	error = input_ff_create_memless(controller->inputdev, NULL, xpad360wr_controller_play_effect);
 	
-	if (error) {
+	if (unlikely(error)) {
 		dev_dbg(device, "input_ff_create_memless() failed!\n");
 		input_ff_destroy(controller->inputdev);
 		/* Remove capability so we don't fool applications */
@@ -515,14 +520,14 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 #endif
 	
     error = input_register_device(controller->inputdev);
-    if (error) {
+    if (unlikely(error)) {
         dev_dbg(device, "input_register_device() failed!\n");
         goto fail5;
     }
 
     controller->irq_in->dev = usbdev;
     error = usb_submit_urb(controller->irq_in, GFP_KERNEL);
-    if (error) {
+    if (unlikely(error)) {
         dev_dbg(device, "usb_submit_urb(controller->irq_in) failed!\n");
         goto fail6;
     }
