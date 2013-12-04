@@ -358,7 +358,7 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 	
     int error = 0;
 	
-    controller->present = false;
+    /* controller->present = false; */ /* Structure was already zeroed out */
     controller->usbdev = usbdev;
     controller->usbintf = interface;
 	
