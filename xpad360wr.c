@@ -537,6 +537,7 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 fail6:
     usb_free_urb(controller->irq_out);
 fail5:
+	input_ff_destroy(controller->inputdev); /* Is this actually required? */
     input_free_device(controller->inputdev);
 fail3:
     usb_free_coherent(
