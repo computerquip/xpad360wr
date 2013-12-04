@@ -40,16 +40,9 @@ LED status definitions (in the form of an enum):
 */
 #define MAX_PACKET_SIZE 32
 
-/* I wish USB device macros were better documented... */
 static struct usb_device_id xpad360wr_table[] = {
 	{
-	.match_flags = USB_DEVICE_ID_MATCH_DEVICE | USB_DEVICE_ID_MATCH_INT_INFO,
-	.idVendor = 0x045e, /* Microsoft Corp. */
-	.idProduct = 0x0719, /* Xbox 360 Wireless Adapter */
-	/* bDevice* is 255 which isn't useful */
-	.bInterfaceClass = USB_CLASS_VENDOR_SPEC, /* 255 */
-	.bInterfaceSubClass = 93,
-	.bInterfaceProtocol = 129 /* This will only match the controllers, not the headsets! */
+		USB_DEVICE_INTERFACE_PROTOCOL(0x045e, 0x0719, 129)
 	},
 	{}
 };
@@ -222,8 +215,6 @@ static void xpad360wr_irq_receive(struct urb *urb)
 
     /* Event from Wireless Receiver */
     if (data[0] == 0x08) {
-        u16 header = le16_to_cpu((data[0] << 8) | data[1]);
-
         switch (data[1]) {
         case 0x00:
 			/* Controller disconnected */
@@ -249,7 +240,7 @@ static void xpad360wr_irq_receive(struct urb *urb)
             dev_dbg(device, "Controller has connected with a headset!\n");
             break;
         default:
-            dev_dbg(device, "Unknown packet received. Length was 2, header was %#.4x\n", header);
+            dev_dbg(device, "Unknown packet received. Length was 2, header was %#.2x\n", data[1]);
         }
     }
     /* Event from Controller */
