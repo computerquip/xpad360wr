@@ -214,7 +214,7 @@ static void xpad360wr_irq_receive(struct urb *urb)
      */
 
     /* Event from Wireless Receiver */
-    if (data[0] == 0x08) {
+    if (data[0] == 0x08 && urb->actual_length == 2) {
         switch (data[1]) {
         case 0x00:
 			/* Controller disconnected */
@@ -244,7 +244,7 @@ static void xpad360wr_irq_receive(struct urb *urb)
         }
     }
     /* Event from Controller */
-    else if (data[0] == 0x00) {
+    else if (data[0] == 0x00 && urb->actual_length == 29) {
         u16 header = le16_to_cpup((u16*)&data[1]);
 
         switch (header) {
