@@ -1,21 +1,16 @@
-#define DEBUG 1
+#define DEBUG
 
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/usb/input.h>
 
-/*
-	Probably about 85% credit goes to xboxdrv and xpad driver.
- */
-
 MODULE_AUTHOR("Zachary Lund <admin@computerquip.com>");
 MODULE_DESCRIPTION("Xbox 360 Wireless Adapter");
 MODULE_LICENSE("GPL");
 
-/* This is constant information we already know before probing device*/
 /*
-LED status definitions:
+	LED status definitions in incremental order:
 	OFF = 0x00,
 	BLINKING,
 	FLASH_1_ON,
@@ -33,9 +28,13 @@ LED status definitions:
 */
 
 /*
-   TODO:
+	TODO:
 	I need to figure out what the rest of these damn packets do.
-	Headsets, although I will implement that in a different file when I get to it.
+	Headsets, although I will implement that in a different driver when I get to it.
+	Figure out how to either (on module load only):
+		a) Get receiver to resend connection packets or
+		b) Properly reset device to resend connection packets.
+	Add support for wired xbox 360 controllers (will do whenever I get mine in the mail). 
 */
 #define MAX_PACKET_SIZE 32
 
@@ -68,21 +67,75 @@ struct xpad360wr_controller {
 	char path[64]; /* Physical stable path we can reference to */
 };
 
-static void xpad360wr_controller_set_led(struct xpad360wr_controller *controller, int status)
+static void xpad360wr_controller_query_presence(struct xpad360wr_controller *controller)
 {
 	u8 *data = controller->ep_out.buffer;
-
-	/* Verbatim xboxdrv. */
-	data[0] = 0x00;
+	
+	data[0] = 0x08;
 	data[1] = 0x00;
-	data[2] = 0x08;
-	data[3] = (u8)(0x40 + (status % 0x0e));
+	data[2] = 0x0F;
+	data[3] = 0xC0;
 	data[4] = 0x00;
 	data[5] = 0x00;
 	data[6] = 0x00;
 	data[7] = 0x00;
 	data[8] = 0x00;
 	data[9] = 0x00;
+	data[10] = 0x00;
+	data[11] = 0x00;
+	controller->irq_out->transfer_buffer_length = 12;
+	
+	if (unlikely(usb_submit_urb(controller->irq_out, GFP_ATOMIC) != 0)) {
+		dev_dbg(&(controller->usbintf->dev), "usb_submit_urb() failed in query_presence()!");
+	}
+}
+
+/* Data must be a buffer with 10 writeable bytes ahead of it! */
+static void _xpad360wr_generate_led_packet(void* _data, u8 status)
+{
+	/* Values higher than 13 defaults to 1 apparently (by hardware).  */
+	/* Also, setting data[2] to 0x00 and status to 0x00 causes rather strange behaviors... */
+	
+	u8* data = _data;
+	data[0] = 0x00;
+	data[1] = 0x00;
+	data[2] = 0x08;
+	data[3] = (u8)(0x40 + status);
+	data[4] = 0x00;
+	data[5] = 0x00;
+	data[6] = 0x00;
+	data[7] = 0x00;
+	data[8] = 0x00;
+	data[9] = 0x00;
+}
+
+/* Must not be called in interrupt context */
+static void xpad360wr_controller_set_led_sync(struct xpad360wr_controller *controller, u8 status)
+{
+	struct usb_endpoint_descriptor * usbep = &(controller->usbintf->cur_altsetting->endpoint[1].desc);
+	u8 data[10];
+	int actual_length = 0;
+	int error = 0;
+
+	_xpad360wr_generate_led_packet(data, status);
+	
+	error = 
+	usb_interrupt_msg(
+		controller->usbdev,
+		usb_sndintpipe(controller->usbdev, usbep->bEndpointAddress),
+		data, sizeof(data), &actual_length, 0
+	);
+	
+	if (error) {
+		dev_dbg(&(controller->usbintf->dev), "synchronous set_led function failed!");
+	}
+}
+
+static void xpad360wr_controller_set_led(struct xpad360wr_controller *controller, u8 status)
+{
+	u8 *data = controller->ep_out.buffer;
+	
+	_xpad360wr_generate_led_packet(data, status);
 	controller->irq_out->transfer_buffer_length = 10;
 
 	if (unlikely(usb_submit_urb(controller->irq_out, GFP_ATOMIC) != 0)) {
@@ -116,7 +169,7 @@ static int xpad360wr_controller_play_effect(struct input_dev *dev, void *stuff, 
 		controller->irq_out->transfer_buffer_length = 12;
 	} else return 1;
 
-	if (unlikely(usb_submit_urb(controller->irq_out, GFP_ATOMIC != 0))) {
+	if (unlikely(usb_submit_urb(controller->irq_out, GFP_ATOMIC) != 0)) {
 		dev_dbg(&(controller->usbintf->dev), "usb_submit_urb() failed in play_effect()!");
 		return -1;
 	}
@@ -170,7 +223,7 @@ static void xpad360wr_irq_send(struct urb *urb)
 		dev_dbg(device, "Controller has been poisoned.\n");
 		return;
 	default:
-		dev_dbg(device, "Unknown status returned by controller.\n");
+		dev_dbg(device, "Unknown status returned by controller: %x\n", urb->status);
 		return;
 	}
 }
@@ -195,7 +248,7 @@ static void xpad360wr_irq_receive(struct urb *urb)
 		dev_dbg(device, "Controller has been poisoned.\n");
 		return;
 	default:
-		dev_dbg(device, "Unknown status returned by controller.\n");
+		dev_dbg(device, "Unknown status returned by controller: %x\n", urb->status);
 		return;
 	}
 
@@ -258,11 +311,17 @@ static void xpad360wr_irq_receive(struct urb *urb)
 			/* data[5] is packet size including the byte itself, which we don't use */
 			/* data[18] and past are padding perhaps used with other devices. */
 
-			/* Mostly from xpad driver */
+#if 1
 			input_report_key(inputdev, BTN_TRIGGER_HAPPY3, data[6] & 0x01); /* D-pad up	 */
 			input_report_key(inputdev, BTN_TRIGGER_HAPPY4, data[6] & 0x02); /* D-pad down */
 			input_report_key(inputdev, BTN_TRIGGER_HAPPY1, data[6] & 0x04); /* D-pad left */
 			input_report_key(inputdev, BTN_TRIGGER_HAPPY2, data[6] & 0x08); /* D-pad right */
+#else
+			input_report_key(inputdev, BTN_DPAD_UP, data[6] & 0x01); /* D-pad up	 */
+			input_report_key(inputdev, BTN_DPAD_DOWN, data[6] & 0x02); /* D-pad down */
+			input_report_key(inputdev, BTN_DPAD_LEFT, data[6] & 0x04); /* D-pad left */
+			input_report_key(inputdev, BTN_DPAD_RIGHT, data[6] & 0x08); /* D-pad right */
+#endif 
 
 			/* start/back buttons */
 			input_report_key(inputdev, BTN_START,  data[6] & 0x10);
@@ -343,9 +402,12 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 	struct usb_endpoint_descriptor *usbep = &(interface->cur_altsetting->endpoint[0].desc);
 	struct xpad360wr_controller *controller = kzalloc(sizeof(struct xpad360wr_controller), GFP_KERNEL);
 	struct device *device = &(interface->dev);
-
 	int error = 0;
-
+	
+	if (!controller) {
+		return -ENOMEM;
+	}
+	
 	controller->usbdev = usbdev;
 	controller->usbintf = interface;
 
@@ -518,6 +580,8 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 		dev_dbg(device, "usb_submit_urb(controller->irq_in) failed!\n");
 		goto fail6;
 	}
+	
+	xpad360wr_controller_query_presence(controller); /* No big deal if this fails.  */
 
 	return 0;
 
@@ -544,17 +608,25 @@ fail1:
 	);
 
 fail0:
+	kfree(controller);
 	return error;
 }
 
 void xpad360wr_disconnect(struct usb_interface* interface)
 {
 	struct xpad360wr_controller *controller = usb_get_intfdata(interface);
-	struct usb_device *usbdev = controller->usbdev;
+	struct usb_device *usbdev = interface_to_usbdev(interface);
 	struct device *device = &(controller->usbintf->dev);
-
+	
 	dev_dbg(device, "Controller disconnected.\n");
-
+	
+	if (controller->present && usbdev->state != USB_STATE_NOTATTACHED) {
+		xpad360wr_controller_set_led_sync(controller, 1);
+	}
+	
+	usb_kill_urb(controller->irq_in);
+	usb_kill_urb(controller->irq_out);
+	
 	input_unregister_device(controller->inputdev);
 
 	usb_free_coherent(
@@ -573,7 +645,7 @@ void xpad360wr_disconnect(struct usb_interface* interface)
 
 	usb_free_urb(controller->irq_in);
 	usb_free_urb(controller->irq_out);
-
+	
 	kfree(controller);
 }
 
@@ -582,7 +654,7 @@ static struct usb_driver xpad360wr_driver = {
 	.probe		= xpad360wr_probe,
 	.disconnect	= xpad360wr_disconnect,
 	.id_table	= xpad360wr_table,
-	//.soft_unbind= 1
+	.soft_unbind	= 1
 };
 
 MODULE_DEVICE_TABLE(usb, xpad360wr_table);
