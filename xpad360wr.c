@@ -612,7 +612,7 @@ fail0:
 void xpad360wr_disconnect(struct usb_interface* interface)
 {
 	struct xpad360wr_controller *controller = usb_get_intfdata(interface);
-	struct usb_device *usbdev = interface_to_usbdev(interface);
+	struct usb_device *usbdev = controller->usbdev;
 	struct device *device = &(controller->usbintf->dev);
 	
 	dev_dbg(device, "Controller disconnected.\n");
