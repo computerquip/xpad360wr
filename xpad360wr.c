@@ -31,9 +31,6 @@ MODULE_LICENSE("GPL");
 	TODO:
 	I need to figure out what the rest of these damn packets do.
 	Headsets, although I will implement that in a different driver when I get to it.
-	Figure out how to either (on module load only):
-		a) Get receiver to resend connection packets or
-		b) Properly reset device to resend connection packets.
 	Add support for wired xbox 360 controllers (will do whenever I get mine in the mail). 
 */
 #define MAX_PACKET_SIZE 32
