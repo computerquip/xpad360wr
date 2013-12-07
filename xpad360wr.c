@@ -243,18 +243,6 @@ static void xpad360wr_receive(struct urb *urb)
 		return;
 	}
 
-	/*  NOTE:
-	 * 	Some bytes sent from some controller packets (specifically data[2] and data[3]) are unknown.
-	 * 	They change on every single packet (excluding 0x0000 packets which doesn't appear to have data[2] or data[3])
-	 * 	However, the same numbers re appear so it does not appear to be completely random.
-	 * 	Some packets are apparently excepted from this behavior when providing "0xF0" (such as input event).
-	 * 	Regardless, they don't seem neccessary for decent functionality. Would be nice to know though.
-	 *
-	 * 	There are two packets, 0x02F8 and 0x01F8, that have unknown use. They alternate in when they are sent.
-	 * 	0x01F8 is always sent first with a following 0x02F8 packet. This seems to be some sort of ping mechanism.
-	 * 	Also seems safe to ignore.
-	 */
-
 	/* Event from Wireless Receiver */
 	if (data[0] == 0x08 && urb->actual_length == 2) {
 		switch (data[1]) {
@@ -291,12 +279,8 @@ static void xpad360wr_receive(struct urb *urb)
 
 		switch (header) {
 		case 0x0000:
-			/* This packet is sent in many variants, none of which seem to mean a damn thing */
-			/* Although, hinting something is a version of this packet (with data[3] being 0xF0) consistently being sent after button/analog events. */
-			/* Maybe it marks the end of an event */
-
+			/* Doesn't seem to mean anything... maybe HID related? */
 			break;
-
 		case 0x0001:
 			/* Event report */
 			/* data[5] is packet size including the byte itself, which we don't use */
@@ -335,7 +319,7 @@ static void xpad360wr_receive(struct urb *urb)
 #if 1
 			input_report_abs(inputdev, ABS_Z, data[8]);
 			input_report_abs(inputdev, ABS_RZ, data[9]);
-#else
+#else /* This code was something I tested with Psychonauts... it makes the camera work out of the box but I still can't figure out wth they are expecting.  */
 			{ 
 				int left = ~(data[8] / 2);
 				int right = (data[9] / 2);
@@ -355,19 +339,15 @@ static void xpad360wr_receive(struct urb *urb)
 
 			break;
 
-		/* The following two packets are for some reason sent twice... purpose? */
-		case 0x000A:
-			/* This appears to be sent when a controller attachment is connected */
-			/* The string seems to be delimited with 0xFF...
-			 * ...that seems really stupid so hopefully the multiple 0xFF is actually something else.  */
-		{
+		/* The following two packets are for some reason sent twice...? */
+		case 0x000A: {
 			int size = (strchr((char*)&data[5], 0xFF) - (char*)&data[5]);
 			dev_dbg(device, "Controller has attachment! Description: %.*s\n", size, (char*)&data[5]);
+			
+			break;
 		}
-		break;
 		case 0x0009:
 			/* This appears when an attachment is connected. It contains the serial barcode on the back of attachment. */
-			/* There are some characters past serial, I do not know what they do or are. */
 			dev_dbg(device, "Attachment Serial: %.14s\n", (char*)&data[5]);
 			break;
 		case 0x01F8:
@@ -389,7 +369,9 @@ static void xpad360wr_receive(struct urb *urb)
 		dev_dbg(device, "Unknown packet received. Length was %i... what about the header...?", urb->actual_length);
 	}
 
-	usb_submit_urb(urb, GFP_ATOMIC);
+	if (unlikely(usb_submit_urb(urb, GFP_ATOMIC) != 0)) {
+		dev_dbg(&device, "usb_submit_urb() failed in receive()!");
+	}
 }
 
 int xpad360_probe(struct usb_interface *interface, const struct usb_device_id *id)
