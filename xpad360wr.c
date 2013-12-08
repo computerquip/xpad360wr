@@ -8,9 +8,11 @@
 	
 	NOTE:
 	Shoutout to xpad and xboxdrv for whatever work is resembling theirs.
+	Also, keep in mind that the Xbox 360 controllers are HID compliant which is what the packets are based on.
+	xpad360 functions pertain to wired controller, xpad360wr pertain to wireless. We don't support original yet. 
 */
 
-
+#define DEBUG
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
@@ -21,24 +23,25 @@ MODULE_DESCRIPTION("Xbox 360 Wireless Adapter");
 MODULE_LICENSE("GPL");
 
 enum {
-	XPAD360WR_LED_OFF,
-	XPAD360WR_LED_ALL_BLINKING,
-	XPAD360WR_LED_FLASH_ON_1,
-	XPAD360WR_LED_FLASH_ON_2,
-	XPAD360WR_LED_FLASH_ON_3,
-	XPAD360WR_LED_FLASH_ON_4,
-	XPAD360WR_LED_ON_1,
-	XPAD360WR_LED_ON_2,
-	XPAD360WR_LED_ON_3,
-	XPAD360WR_LED_ON_4,
-	XPAD360WR_LED_ROTATING,
-	XPAD360WR_LED_SECTIONAL_BLINKING,
-	XPAD360WR_LED_SLOW_SECTIONAL_BLINKING,
-	XPAD360WR_LED_ALTERNATING
+	XPAD360_LED_OFF,
+	XPAD360_LED_ALL_BLINKING,
+	XPAD360_LED_FLASH_ON_1,
+	XPAD360_LED_FLASH_ON_2,
+	XPAD360_LED_FLASH_ON_3,
+	XPAD360_LED_FLASH_ON_4,
+	XPAD360_LED_ON_1,
+	XPAD360_LED_ON_2,
+	XPAD360_LED_ON_3,
+	XPAD360_LED_ON_4,
+	XPAD360_LED_ROTATING,
+	XPAD360_LED_SECTIONAL_BLINKING,
+	XPAD360_LED_SLOW_SECTIONAL_BLINKING,
+	XPAD360_LED_ALTERNATING
 };
 
 static struct usb_device_id xpad360_table[] = {
 	{ USB_DEVICE_INTERFACE_PROTOCOL(0x045E, 0x0719, 129) },
+	{ USB_DEVICE_INTERFACE_PROTOCOL(0x045E, 0x028e, 1) },
 	{}
 };
 
@@ -62,6 +65,9 @@ struct xpad360_controller {
 	char path[64]; /* Physical stable path we can reference to */
 };
 
+/* 
+ * Parsing and generating functions
+ */
 static void xpad360wr_query_presence(struct xpad360_controller *controller)
 {
 	u8 *data = controller->out.buffer;
@@ -85,11 +91,52 @@ static void xpad360wr_query_presence(struct xpad360_controller *controller)
 	}
 }
 
+/* Data must be a buffer with 3 writeable bytes ahead of it!*/
+static void _xpad360_generate_led_packet(void* _data, u8 status)
+{
+	u8 *data = _data;
+	data[0] = 0x01;
+	data[1] = 0x03;
+	data[2] = status;
+}
+
+static void xpad360_set_led_sync(struct xpad360_controller *controller, u8 status) {
+	struct usb_endpoint_descriptor * usbep = &(controller->usbintf->cur_altsetting->endpoint[1].desc);
+	struct usb_device *usbdev = interface_to_usbdev(controller->usbintf);
+	u8 data[3];
+	int actual_length = 0;
+	int error = 0;
+	
+	_xpad360_generate_led_packet(data, status);
+	
+	error = 
+	usb_interrupt_msg(
+		usbdev,	usb_sndintpipe(usbdev, usbep->bEndpointAddress),
+		data, sizeof(data), &actual_length, 0
+	);
+	
+	if (error) {
+		dev_dbg(&(controller->usbintf->dev), "synchronous set_led function failed!");
+	}
+}
+
+static void xpad360_set_led(struct xpad360_controller *controller, u8 status) 
+{
+	u8 *data = controller->out.buffer;
+	
+	_xpad360_generate_led_packet(data, status);
+	controller->out.urb->transfer_buffer_length = 3;
+
+	if (unlikely(usb_submit_urb(controller->out.urb, GFP_ATOMIC) != 0)) {
+		dev_dbg(&(controller->usbintf->dev), "usb_submit_urb() failed in set_led()!");
+	}
+}
+
 /* Data must be a buffer with 10 writeable bytes ahead of it! */
 static void _xpad360wr_generate_led_packet(void* _data, u8 status, u8 test)
 {
 	/* test does something.. haven't figured it out yet. */
-	u8* data = _data;
+	u8 *data = _data;
 	data[0] = 0x00;
 	data[1] = 0x00;
 	data[2] = test;
@@ -136,12 +183,41 @@ static void xpad360wr_set_led(struct xpad360_controller *controller, u8 status)
 	}
 }
 
+static int xpad360_rumble(struct input_dev *dev, void* stuff, struct ff_effect *effect)
+{
+	struct xpad360_controller *controller = input_get_drvdata(dev);
+
+	if (effect->type == FF_RUMBLE) {
+		u8 *data = controller->out.buffer;
+		u16 strong = effect->u.rumble.strong_magnitude;
+		u16 weak = effect->u.rumble.weak_magnitude;
+		
+		data[0] = 0x00;
+		data[1] = 0x08;
+		data[2] = 0x00;
+		data[3] = (u8)(strong / 255);
+		data[4] = (u8)(weak / 255);
+		data[5] = 0x00;
+		data[6] = 0x00;
+		data[7] = 0x00;
+		controller->out.urb->transfer_buffer_length = 8;
+	}
+	else return -1;
+	
+	if (unlikely(usb_submit_urb(controller->out.urb, GFP_ATOMIC) != 0)) {
+		dev_dbg(&(controller->usbintf->dev), "usb_submit_urb() failed in play_effect()!");
+		return -1;
+	}
+	
+	return 0;
+}
+
 static int xpad360wr_rumble(struct input_dev *dev, void *stuff, struct ff_effect *effect)
 {
 	struct xpad360_controller *controller = input_get_drvdata(dev);
-	u8 *data = controller->out.buffer;
 
 	if (effect->type == FF_RUMBLE) {
+		u8 *data = controller->out.buffer;
 		u16 strong = effect->u.rumble.strong_magnitude;
 		u16 weak = effect->u.rumble.weak_magnitude;
 
@@ -150,8 +226,8 @@ static int xpad360wr_rumble(struct input_dev *dev, void *stuff, struct ff_effect
 		data[2] = 0x0F;
 		data[3] = 0xC0;
 		data[4] = 0x00;
-		data[5] = strong / 255; /* Left */
-		data[6] = weak / 255; /* Right */
+		data[5] = (u8)(strong / 255); /* Left */
+		data[6] = (u8)(weak / 255); /* Right */
 		data[7] = 0x00;
 		data[8] = 0x00;
 		data[9] = 0x00;
@@ -167,6 +243,73 @@ static int xpad360wr_rumble(struct input_dev *dev, void *stuff, struct ff_effect
 
 	return 0;
 }
+
+/* This function is similar for all 360 controllers, only with different offsets. */
+static void xpad360_parse_event(struct xpad360_controller *controller, void *_data){
+	struct input_dev *inputdev = controller->inputdev;
+	struct device *device = &(controller->usbintf->dev);
+	u8 *data = _data;
+	
+	dev_dbg(device, "parsing event");
+#if 1
+#if 1
+	input_report_key(inputdev, BTN_TRIGGER_HAPPY3, data[0] & 0x01); /* D-pad up	 */
+	input_report_key(inputdev, BTN_TRIGGER_HAPPY4, data[0] & 0x02); /* D-pad down */
+	input_report_key(inputdev, BTN_TRIGGER_HAPPY1, data[0] & 0x04); /* D-pad left */
+	input_report_key(inputdev, BTN_TRIGGER_HAPPY2, data[0] & 0x08); /* D-pad right */
+#else	/* The below is from xpad... but I can't find a single game that expects this. */
+	input_report_abs(inputdev, ABS_HAT0Y, !!(data[0] & 0x02) - !!(data[0] & 0x01));
+	input_report_abs(inputdev, ABS_HAT0X, !!(data[0] & 0x08) - !!(data[0] & 0x04));
+#endif
+#else	/* Did the below since I thought I had originally coded incorrectly.. seems the below is just unused. */
+	input_report_key(inputdev, BTN_DPAD_UP, data[0] & 0x01); /* D-pad up	 */
+	input_report_key(inputdev, BTN_DPAD_DOWN, data[0] & 0x02); /* D-pad down */
+	input_report_key(inputdev, BTN_DPAD_LEFT, data[0] & 0x04); /* D-pad left */
+	input_report_key(inputdev, BTN_DPAD_RIGHT, data[0] & 0x08); /* D-pad right */
+#endif 
+
+	/* start/back buttons */
+	input_report_key(inputdev, BTN_START,  data[0] & 0x10);
+	input_report_key(inputdev, BTN_SELECT, data[0] & 0x20); /* Back */
+
+	/* stick press left/right */
+	input_report_key(inputdev, BTN_THUMBL, data[0] & 0x40);
+	input_report_key(inputdev, BTN_THUMBR, data[0] & 0x80);
+
+	input_report_key(inputdev, BTN_TL,	data[1] & 0x01); /* Left Shoulder */
+	input_report_key(inputdev, BTN_TR,	data[1] & 0x02); /* Right Shoulder */
+	input_report_key(inputdev, BTN_MODE,	data[1] & 0x04); /* Guide */
+	/* data[8] & 0x08 is a dummy value */
+	input_report_key(inputdev, BTN_A,	data[1] & 0x10);
+	input_report_key(inputdev, BTN_B,	data[1] & 0x20);
+	input_report_key(inputdev, BTN_X,	data[1] & 0x40);
+	input_report_key(inputdev, BTN_Y,	data[1] & 0x80);
+
+	/* triggers */
+#if 1
+	input_report_abs(inputdev, ABS_Z, data[2]);
+	input_report_abs(inputdev, ABS_RZ, data[3]);
+#else /* This code was something I tested with Psychonauts... it makes the camera work out of the box but I still can't figure out wth they are expecting.  */
+	{ 
+		int left = ~(data[2] / 2);
+		int right = (data[3] / 2);
+		input_report_abs(inputdev, ABS_Z, (left + right) + 128);
+	}
+#endif
+	/* left stick */
+	input_report_abs(inputdev, ABS_X, (s16)le16_to_cpup((__le16*)&data[4]));
+	input_report_abs(inputdev, ABS_Y, ~(s16)le16_to_cpup((__le16*)&data[6]));
+
+	/* right stick */
+	input_report_abs(inputdev, ABS_RX, (s16)le16_to_cpup((__le16*)&data[8]));
+	input_report_abs(inputdev, ABS_RY, ~(s16)le16_to_cpup((__le16*)&data[10]));
+	
+	input_sync(inputdev);
+}
+
+/*
+ * Various callback functions, most self documenting. 
+ */
 
 static int xpad360_controller_open(struct input_dev* dev)
 {
@@ -219,10 +362,57 @@ static void xpad360wr_generic_complete(struct urb *urb)
 	}
 }
 
+static void xpad360_receive(struct urb* urb) {
+	struct xpad360_controller *controller = urb->context;
+	unsigned char* data = controller->in.buffer;
+	struct device *device = &(controller->usbintf->dev);
+	u16 header;
+
+	switch (urb->status) {
+	case 0:
+		break;
+	case -ECONNRESET:
+		dev_dbg(device, "Controller has been reset.\n");
+		return;
+	case -ESHUTDOWN:
+		dev_dbg(device, "Controller has shutdown.\n");
+		return;
+	case -ENOENT:
+		dev_dbg(device, "Controller has been poisoned.\n");
+		return;
+	default:
+		dev_dbg(device, "Unknown status returned by controller: %x\n", urb->status);
+		return;
+	}
+	
+	header = le16_to_cpup((__le16*)&data[0]);
+	switch (header) {
+	case 0x0301:
+		dev_dbg(device, "Controller LED status: %i\n", data[2]);
+		break;
+	case 0x0303:
+		/* Some HID something or other... blah */
+		dev_dbg(device, "Rumble packet or something... I dunno. Have some info: %i\n", data[2]);
+		break;
+	case 0x0308:
+		dev_dbg(device, "Attachment attached! We don't support any of them. );");
+		break;
+	case 0x1400:
+		xpad360_parse_event(controller, &data[2]);
+		dev_dbg(device, "Length was %i\n", urb->actual_length);
+		break;
+	default:
+		dev_dbg(device, "Unknown packet received. Length was %i... what about the header...?", urb->actual_length);
+	}
+	
+	if (unlikely(usb_submit_urb(urb, GFP_ATOMIC) != 0)) {
+		dev_dbg(device, "usb_submit_urb() failed in receive()!");
+	}
+}
+
 static void xpad360wr_receive(struct urb *urb)
 {
 	struct xpad360_controller *controller = urb->context;
-	struct input_dev *inputdev = controller->inputdev;
 	unsigned char* data = controller->in.buffer;
 	struct device *device = &(controller->usbintf->dev);
 
@@ -282,64 +472,8 @@ static void xpad360wr_receive(struct urb *urb)
 			/* Doesn't seem to mean anything... maybe HID related? */
 			break;
 		case 0x0001:
-			/* Event report */
-			/* data[5] is packet size including the byte itself, which we don't use */
-			/* data[18] and past are padding perhaps used with other devices. */
-
-#if 1
-			input_report_key(inputdev, BTN_TRIGGER_HAPPY3, data[6] & 0x01); /* D-pad up	 */
-			input_report_key(inputdev, BTN_TRIGGER_HAPPY4, data[6] & 0x02); /* D-pad down */
-			input_report_key(inputdev, BTN_TRIGGER_HAPPY1, data[6] & 0x04); /* D-pad left */
-			input_report_key(inputdev, BTN_TRIGGER_HAPPY2, data[6] & 0x08); /* D-pad right */
-#else
-			input_report_key(inputdev, BTN_DPAD_UP, data[6] & 0x01); /* D-pad up	 */
-			input_report_key(inputdev, BTN_DPAD_DOWN, data[6] & 0x02); /* D-pad down */
-			input_report_key(inputdev, BTN_DPAD_LEFT, data[6] & 0x04); /* D-pad left */
-			input_report_key(inputdev, BTN_DPAD_RIGHT, data[6] & 0x08); /* D-pad right */
-#endif 
-
-			/* start/back buttons */
-			input_report_key(inputdev, BTN_START,  data[6] & 0x10);
-			input_report_key(inputdev, BTN_SELECT, data[6] & 0x20); /* Back */
-
-			/* stick press left/right */
-			input_report_key(inputdev, BTN_THUMBL, data[6] & 0x40);
-			input_report_key(inputdev, BTN_THUMBR, data[6] & 0x80);
-
-			input_report_key(inputdev, BTN_TL,	data[7] & 0x01); /* Left Shoulder */
-			input_report_key(inputdev, BTN_TR,	data[7] & 0x02); /* Right Shoulder */
-			input_report_key(inputdev, BTN_MODE,	data[7] & 0x04); /* Guide */
-			/* data[8] & 0x08 is a dummy value */
-			input_report_key(inputdev, BTN_A,	data[7] & 0x10);
-			input_report_key(inputdev, BTN_B,	data[7] & 0x20);
-			input_report_key(inputdev, BTN_X,	data[7] & 0x40);
-			input_report_key(inputdev, BTN_Y,	data[7] & 0x80);
-
-			/* triggers */
-#if 1
-			input_report_abs(inputdev, ABS_Z, data[8]);
-			input_report_abs(inputdev, ABS_RZ, data[9]);
-#else /* This code was something I tested with Psychonauts... it makes the camera work out of the box but I still can't figure out wth they are expecting.  */
-			{ 
-				int left = ~(data[8] / 2);
-				int right = (data[9] / 2);
-				input_report_abs(inputdev, ABS_Z, (left + right) + 128);
-			}
-#endif
-
-			/* left stick */
-			input_report_abs(inputdev, ABS_X, (s16)le16_to_cpup((__le16*)&data[10]));
-			input_report_abs(inputdev, ABS_Y, ~(s16)le16_to_cpup((__le16*)&data[12]));
-
-			/* right stick */
-			input_report_abs(inputdev, ABS_RX, (s16)le16_to_cpup((__le16*)&data[14]));
-			input_report_abs(inputdev, ABS_RY, ~(s16)le16_to_cpup((__le16*)&data[16]));
-
-			input_sync(inputdev);
-
+			xpad360_parse_event(controller, &data[6]);
 			break;
-
-		/* The following two packets are for some reason sent twice...? */
 		case 0x000A: {
 			int size = (strchr((char*)&data[5], 0xFF) - (char*)&data[5]);
 			dev_dbg(device, "Controller has attachment! Description: %.*s\n", size, (char*)&data[5]);
@@ -370,7 +504,7 @@ static void xpad360wr_receive(struct urb *urb)
 	}
 
 	if (unlikely(usb_submit_urb(urb, GFP_ATOMIC) != 0)) {
-		dev_dbg(&device, "usb_submit_urb() failed in receive()!");
+		dev_dbg(device, "usb_submit_urb() failed in receive()!");
 	}
 }
 
@@ -381,10 +515,10 @@ int xpad360_probe(struct usb_interface *interface, const struct usb_device_id *i
 	struct usb_endpoint_descriptor *ep_out = &(interface->cur_altsetting->endpoint[1].desc);
 	struct xpad360_controller *controller = kzalloc(sizeof(struct xpad360_controller), GFP_KERNEL);
 	struct device *device = &(interface->dev);
-	//int protocol = interface->cur_altsetting->desc.bInterfaceProtocol;
+	int protocol = interface->cur_altsetting->desc.bInterfaceProtocol;
 	int error = 0;
 	
-	dev_dbg(device, "Device: %s\nSerial: %s\nUsage: %i", usbdev->product, usbdev->serial, interface->pm_usage_cnt.counter);
+	dev_dbg(device, "Device: %s\nSerial: %s\n", usbdev->product, usbdev->serial);
 	
 	if (!controller) {
 		return -ENOMEM;
@@ -400,16 +534,6 @@ int xpad360_probe(struct usb_interface *interface, const struct usb_device_id *i
 		goto fail0;
 	}
 	
-	/* Allocate ff structure */
-	error = input_ff_create_memless(controller->inputdev, NULL, xpad360wr_rumble);
-
-	/* We can live without FF support. */
-	if (unlikely(error)) {
-		dev_dbg(device, "input_ff_create_memless() failed!\n");
-		input_ff_destroy(controller->inputdev);
-		error = 0;
-	}
-
 	/* Allocate in and out buffers*/
 	controller->in.buffer =
 		usb_alloc_coherent(
@@ -508,10 +632,12 @@ int xpad360_probe(struct usb_interface *interface, const struct usb_device_id *i
 	SET_BIT(BTN_SELECT);
 	SET_BIT(BTN_THUMBL);
 	SET_BIT(BTN_THUMBR);
+#if 1
 	SET_BIT(BTN_TRIGGER_HAPPY1);
 	SET_BIT(BTN_TRIGGER_HAPPY2);
 	SET_BIT(BTN_TRIGGER_HAPPY3);
 	SET_BIT(BTN_TRIGGER_HAPPY4);
+#endif
 	SET_BIT(BTN_TL);
 	SET_BIT(BTN_TR);
 	SET_BIT(BTN_MODE);
@@ -538,30 +664,56 @@ int xpad360_probe(struct usb_interface *interface, const struct usb_device_id *i
 	SET_BIT(ABS_RZ);
 
 #undef SET_BIT
+#if 0
+#define SET_BIT(type) \
+	__set_bit(type, controller->inputdev->absbit); \
+	input_set_abs_params(controller->inputdev, type, 0, 1, 0, 0);
+	SET_BIT(ABS_HAT0X);
+	SET_BIT(ABS_HAT0Y);
+#undef SET_BIT
+#endif
 #define SET_BIT(type) __set_bit(type, controller->inputdev->ffbit)
+	
+
 
 	/* Force Feedback */
 	__set_bit(EV_FF, controller->inputdev->evbit);
 	SET_BIT(FF_RUMBLE);
 
 #undef SET_BIT
+
+	/* Immediately start reading packets so we can catch our presence packet. */
+	if (protocol == 129) {
+		xpad360wr_query_presence(controller);
+		error = input_ff_create_memless(controller->inputdev, NULL, xpad360wr_rumble);
+	}
+	else if (protocol == 1) {
+		controller->present = true;
+		controller->in.urb->complete = xpad360_receive;
+		xpad360_set_led(controller, XPAD360_LED_ON_1);
+		/* Unfortunately, I know of no simple way to change LED based on how many are connected without HID. */
+		error = input_ff_create_memless(controller->inputdev, NULL, xpad360_rumble);
+	}
+	
+	/* Allocate ff structure */
+	if (error) {
+		dev_dbg(device, "input_ff_create_memless() failed!\n");
+		input_ff_destroy(controller->inputdev);
+		error = 0; /* We can live without FF support. */
+	}
+	
+	error = usb_submit_urb(controller->in.urb, GFP_KERNEL);
+	if (unlikely(error)) {
+		dev_dbg(device, "usb_submit_urb(controller->in.urb) failed!\n");
+		goto fail4;
+	}
 	
 	/* Register device so the input subsystem sees it. */
 	error = input_register_device(controller->inputdev);
 	if (unlikely(error)) {
 		dev_dbg(device, "input_register_device() failed!\n");
-		goto fail4;
-	}
-
-	/* Immediately start reading packets so we can catch our presence packet. */
-	error = usb_submit_urb(controller->in.urb, GFP_KERNEL);
-	if (unlikely(error)) {
-		dev_dbg(device, "usb_submit_urb(controller->in.urb) failed!\n");
 		goto fail5;
 	}
-	
-	/* This will cause the reciever to send a connection packet which our callback will handle. */
-	xpad360wr_query_presence(controller); /* No big deal if this fails.  */
 
 	return 0;
 
@@ -569,6 +721,7 @@ fail5:
 	input_free_device(controller->inputdev);
 fail4:
 	usb_free_urb(controller->out.urb);
+	input_ff_destroy(controller->inputdev); 
 fail3:
 	usb_free_urb(controller->in.urb);
 fail2:
@@ -579,15 +732,12 @@ fail2:
 		controller->out.dma
 	);
 fail1:
-	input_ff_destroy(controller->inputdev); 
-
 	usb_free_coherent(
 		usbdev,
 		ep_in->wMaxPacketSize,
 		controller->in.buffer,
 		controller->in.dma
 	);
-
 fail0:
 	kfree(controller);
 	return error;
@@ -598,11 +748,16 @@ void xpad360_disconnect(struct usb_interface* interface)
 	struct xpad360_controller *controller = usb_get_intfdata(interface);
 	struct usb_device *usbdev = interface_to_usbdev(interface);
 	struct device *device = &(controller->usbintf->dev);
+	int protocol = interface->cur_altsetting->desc.bInterfaceProtocol;
 	
 	dev_dbg(device, "Controller disconnected.\n");
 	
 	if (controller->present && usbdev->state != USB_STATE_NOTATTACHED) {
-		xpad360wr_set_led_sync(controller, XPAD360WR_LED_OFF);
+		if (protocol == 129)
+			xpad360wr_set_led_sync(controller, XPAD360_LED_ROTATING);
+		else if (protocol == 1) {
+			xpad360_set_led_sync(controller, XPAD360_LED_ROTATING);
+		}
 	}
 	
 	usb_kill_urb(controller->in.urb);
