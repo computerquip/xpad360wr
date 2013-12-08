@@ -39,6 +39,12 @@ enum {
 	XPAD360_LED_ALTERNATING
 };
 
+/* Wireless controllers use protocol 129 
+ * Wired controllers use protocol 1
+ * This should be the same across all Xbox 360 controllers.
+ * Other interfaces with different protocols are not controllers. 
+ */
+
 static struct usb_device_id xpad360_table[] = {
 	{ USB_DEVICE_INTERFACE_PROTOCOL(0x045E, 0x0719, 129) },
 	{ USB_DEVICE_INTERFACE_PROTOCOL(0x045E, 0x028e, 1) },
@@ -245,27 +251,13 @@ static int xpad360wr_rumble(struct input_dev *dev, void *stuff, struct ff_effect
 }
 
 /* This function is similar for all 360 controllers, only with different offsets. */
-static void xpad360_parse_event(struct xpad360_controller *controller, void *_data){
+static void xpad360_parse_common_event(struct xpad360_controller *controller, void *_data){
 	struct input_dev *inputdev = controller->inputdev;
-	struct device *device = &(controller->usbintf->dev);
 	u8 *data = _data;
-	
-	dev_dbg(device, "parsing event");
-#if 1
-#if 1
-	input_report_key(inputdev, BTN_TRIGGER_HAPPY3, data[0] & 0x01); /* D-pad up	 */
-	input_report_key(inputdev, BTN_TRIGGER_HAPPY4, data[0] & 0x02); /* D-pad down */
-	input_report_key(inputdev, BTN_TRIGGER_HAPPY1, data[0] & 0x04); /* D-pad left */
-	input_report_key(inputdev, BTN_TRIGGER_HAPPY2, data[0] & 0x08); /* D-pad right */
-#else	/* The below is from xpad... but I can't find a single game that expects this. */
-	input_report_abs(inputdev, ABS_HAT0Y, !!(data[0] & 0x02) - !!(data[0] & 0x01));
-	input_report_abs(inputdev, ABS_HAT0X, !!(data[0] & 0x08) - !!(data[0] & 0x04));
-#endif
+#if 0
+
 #else	/* Did the below since I thought I had originally coded incorrectly.. seems the below is just unused. */
-	input_report_key(inputdev, BTN_DPAD_UP, data[0] & 0x01); /* D-pad up	 */
-	input_report_key(inputdev, BTN_DPAD_DOWN, data[0] & 0x02); /* D-pad down */
-	input_report_key(inputdev, BTN_DPAD_LEFT, data[0] & 0x04); /* D-pad left */
-	input_report_key(inputdev, BTN_DPAD_RIGHT, data[0] & 0x08); /* D-pad right */
+
 #endif 
 
 	/* start/back buttons */
@@ -366,6 +358,7 @@ static void xpad360_receive(struct urb* urb) {
 	struct xpad360_controller *controller = urb->context;
 	unsigned char* data = controller->in.buffer;
 	struct device *device = &(controller->usbintf->dev);
+	struct input_dev *inputdev = controller->inputdev;
 	u16 header;
 
 	switch (urb->status) {
@@ -398,7 +391,9 @@ static void xpad360_receive(struct urb* urb) {
 		dev_dbg(device, "Attachment attached! We don't support any of them. );");
 		break;
 	case 0x1400:
-		xpad360_parse_event(controller, &data[2]);
+		input_report_abs(inputdev, ABS_HAT0X, !!(data[2] & 0x08) - !!(data[2] & 0x04));
+		input_report_abs(inputdev, ABS_HAT0Y, !!(data[2] & 0x02) - !!(data[2] & 0x01));
+		xpad360_parse_common_event(controller, &data[2]);
 		dev_dbg(device, "Length was %i\n", urb->actual_length);
 		break;
 	default:
@@ -472,12 +467,16 @@ static void xpad360wr_receive(struct urb *urb)
 			/* Doesn't seem to mean anything... maybe HID related? */
 			break;
 		case 0x0001:
-			xpad360_parse_event(controller, &data[6]);
+			dev_dbg(device, "Reporting %i as D-pad up", data[0] & 0x01);
+			input_report_key(controller->inputdev, BTN_TRIGGER_HAPPY3, data[6] & 0x01); /* D-pad up	 */
+			input_report_key(controller->inputdev, BTN_TRIGGER_HAPPY4, data[6] & 0x02); /* D-pad down */
+			input_report_key(controller->inputdev, BTN_TRIGGER_HAPPY1, data[6] & 0x04); /* D-pad left */
+			input_report_key(controller->inputdev, BTN_TRIGGER_HAPPY2, data[6] & 0x08); /* D-pad right */
+			xpad360_parse_common_event(controller, &data[6]);
 			break;
 		case 0x000A: {
 			int size = (strchr((char*)&data[5], 0xFF) - (char*)&data[5]);
 			dev_dbg(device, "Controller has attachment! Description: %.*s\n", size, (char*)&data[5]);
-			
 			break;
 		}
 		case 0x0009:
@@ -632,12 +631,6 @@ int xpad360_probe(struct usb_interface *interface, const struct usb_device_id *i
 	SET_BIT(BTN_SELECT);
 	SET_BIT(BTN_THUMBL);
 	SET_BIT(BTN_THUMBR);
-#if 1
-	SET_BIT(BTN_TRIGGER_HAPPY1);
-	SET_BIT(BTN_TRIGGER_HAPPY2);
-	SET_BIT(BTN_TRIGGER_HAPPY3);
-	SET_BIT(BTN_TRIGGER_HAPPY4);
-#endif
 	SET_BIT(BTN_TL);
 	SET_BIT(BTN_TR);
 	SET_BIT(BTN_MODE);
@@ -664,17 +657,7 @@ int xpad360_probe(struct usb_interface *interface, const struct usb_device_id *i
 	SET_BIT(ABS_RZ);
 
 #undef SET_BIT
-#if 0
-#define SET_BIT(type) \
-	__set_bit(type, controller->inputdev->absbit); \
-	input_set_abs_params(controller->inputdev, type, 0, 1, 0, 0);
-	SET_BIT(ABS_HAT0X);
-	SET_BIT(ABS_HAT0Y);
-#undef SET_BIT
-#endif
 #define SET_BIT(type) __set_bit(type, controller->inputdev->ffbit)
-	
-
 
 	/* Force Feedback */
 	__set_bit(EV_FF, controller->inputdev->evbit);
@@ -684,10 +667,18 @@ int xpad360_probe(struct usb_interface *interface, const struct usb_device_id *i
 
 	/* Immediately start reading packets so we can catch our presence packet. */
 	if (protocol == 129) {
+		__set_bit(BTN_TRIGGER_HAPPY1, controller->inputdev->keybit);
+		__set_bit(BTN_TRIGGER_HAPPY2, controller->inputdev->keybit);
+		__set_bit(BTN_TRIGGER_HAPPY3, controller->inputdev->keybit);
+		__set_bit(BTN_TRIGGER_HAPPY4, controller->inputdev->keybit);
 		xpad360wr_query_presence(controller);
 		error = input_ff_create_memless(controller->inputdev, NULL, xpad360wr_rumble);
 	}
 	else if (protocol == 1) {
+		__set_bit(ABS_HAT0X, controller->inputdev->absbit); 
+		__set_bit(ABS_HAT0Y, controller->inputdev->absbit); 
+		input_set_abs_params(controller->inputdev, ABS_HAT0X, -1, 1, 0, 0);
+		input_set_abs_params(controller->inputdev, ABS_HAT0Y, -1, 1, 0, 0);
 		controller->present = true;
 		controller->in.urb->complete = xpad360_receive;
 		xpad360_set_led(controller, XPAD360_LED_ON_1);
