@@ -1,4 +1,3 @@
-
 obj-m += xpad360wr.o
 
 all:
