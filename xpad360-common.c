@@ -74,35 +74,104 @@ static void xpad360_controller_close(struct input_dev* dev)
 	/* We cannot stop inquiring packets as connection packets are sent from the same interface. */
 }
 
+static void xpad360_common_input_capabilities(struct input_dev *inputdev) 
+{
+	#define SET_BIT(type) __set_bit(type, inputdev->keybit);
+
+	__set_bit(EV_KEY, inputdev->evbit); /* General device that has key presses. */
+	SET_BIT(BTN_A);
+	SET_BIT(BTN_B);
+	SET_BIT(BTN_X);
+	SET_BIT(BTN_Y);
+	SET_BIT(BTN_START);
+	SET_BIT(BTN_SELECT);
+	SET_BIT(BTN_THUMBL);
+	SET_BIT(BTN_THUMBR);
+	SET_BIT(BTN_TL);
+	SET_BIT(BTN_TR);
+	SET_BIT(BTN_MODE);
+
+#undef SET_BIT
+#define SET_BIT(type) \
+	__set_bit(type, inputdev->absbit);\
+	input_set_abs_params(inputdev, type, -32768, 32767, 16, 128);
+
+	/* Axis... */
+	__set_bit(EV_ABS, inputdev->evbit);
+	SET_BIT(ABS_X);
+	SET_BIT(ABS_Y);
+	SET_BIT(ABS_RX);
+	SET_BIT(ABS_RY);
+
+#undef SET_BIT
+#define SET_BIT(type) \
+	__set_bit(type, inputdev->absbit); \
+	input_set_abs_params(inputdev, type, 0, 255, 0, 0);
+
+	/* Triggers... */
+	SET_BIT(ABS_Z);
+	SET_BIT(ABS_RZ);
+
+#undef SET_BIT
+#define SET_BIT(type) __set_bit(type, inputdev->ffbit)
+
+	/* Force Feedback */
+	__set_bit(EV_FF, inputdev->evbit);
+	SET_BIT(FF_RUMBLE);
+
+#undef SET_BIT
+}
+
 void xpad360_common_init_input_dev(struct input_dev *inputdev, struct xpad360_controller *controller)
 {
-	struct device *device = &controller->usbintf->device;
-	struct usb_device = interface_to_usbdev(controller->usbintf);
+	struct device *device = &controller->usbintf->dev;
+	struct usb_device *usbdev = interface_to_usbdev(controller->usbintf);
 
-		/* Initialize input device */
+	xpad360_common_input_capabilities(inputdev);
+	
 	inputdev->name = usbdev->product;
 	inputdev->phys = controller->path;
 	inputdev->dev.parent = device;
 	inputdev->open = xpad360_controller_open;
 	inputdev->close = xpad360_controller_close;
+	
+	usb_to_input_id(usbdev, &controller->inputdev->id);
+	input_set_drvdata(controller->inputdev, controller);
 }
 
 void xpad360_common_register_input_work(struct work_struct* work)
 {
 	struct input_work *inputwork = (struct input_work*)work;
+	struct xpad360_controller *controller = inputwork->controller;
+	struct device *device = &inputwork->controller->usbintf->dev;
 	int error = 0;
 
-	inputwork->inputdev = devm_input_allocate_device(inputwork->device);
+	dev_dbg(device, "Registering input device...");
+	
+	/* We assume that inputdev has already been unregistered. */
+	controller->inputdev = input_allocate_device();
 
-	if (unlikely(inputwork->inputdev == NULL)) {
-		dev_dbg(inputwork->device, "devm_input_allocate_device failed!\n");
+	if (unlikely(controller->inputdev == NULL)) {
+		dev_dbg(device, "input_allocate_device failed!\n");
 		return;
 	}
+	
+	xpad360_common_init_input_dev(controller->inputdev, controller);
+	__set_bit(BTN_TRIGGER_HAPPY1, controller->inputdev->keybit);
+	__set_bit(BTN_TRIGGER_HAPPY2, controller->inputdev->keybit);
+	__set_bit(BTN_TRIGGER_HAPPY3, controller->inputdev->keybit);
+	__set_bit(BTN_TRIGGER_HAPPY4, controller->inputdev->keybit);
 
-	error = input_register_device(inputwork->inputdev);
+	error = input_ff_create_memless(controller->inputdev, NULL, xpad360wr_rumble);
+	if (error) {
+		dev_dbg(device, "input_ff_create_memless() failed!\n");
+		error = 0; /* We can live without FF support. */
+	}
+	
+	error = input_register_device(controller->inputdev);
 
 	if (unlikely(error)) {
-		dev_dbg(inputwork->device, "input_register_device() failed!\n");
+		dev_dbg(device, "input_register_device() failed!\n");
 		return;
 	}
 }
@@ -110,8 +179,10 @@ void xpad360_common_register_input_work(struct work_struct* work)
 void xpad360_common_unregister_input_work(struct work_struct* work)
 {
 	struct input_work *inputwork = (struct input_work*)work;
+	struct device *device = &inputwork->controller->usbintf->dev;
 
-	input_unregister_device(inputwork->inputdev);
+	dev_dbg(device, "Unregistering input device...");
+	input_unregister_device(inputwork->controller->inputdev);
 }
 
 static void xpad360_common_complete(struct urb *urb)
@@ -179,19 +250,8 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 	
 	controller->usbintf = interface;
 	
-	/* Allocate input structure */
-	controller->inputdev = devm_input_allocate_device(device);
-	
-	if (unlikely(controller->inputdev == NULL)) {
-		error = -ENOMEM;
-		goto fail0;
-	}
-	
-	controller->register_input.inputdev = controller->inputdev;
-	controller->register_input.device = device;
-
-	controller->unregister_input.inputdev = controller->inputdev;
-	controller->unregister_input.device = device;
+	controller->register_input.controller = controller;
+	controller->unregister_input.controller = controller;
 
 	INIT_WORK((struct work_struct *)&controller->register_input, xpad360_common_register_input_work);
 	INIT_WORK((struct work_struct *)&controller->unregister_input, xpad360_common_unregister_input_work);
@@ -239,9 +299,6 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 		goto fail3;
 	}
 
-	usb_to_input_id(usbdev, &controller->inputdev->id);
-
-
 	controller->num_controller = (interface->cur_altsetting->desc.bInterfaceNumber + 1) / 2;
 	
 	{
@@ -251,9 +308,6 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 		strlcat(controller->path, tmp, sizeof(controller->path));
 	}
 
-	xpad360_common_init_input_dev(controller->inputdev, controller);
-
-	input_set_drvdata(controller->inputdev, controller);
 	usb_set_intfdata(interface, controller);
 
 	/* Initialize URBs*/
@@ -277,76 +331,10 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 	controller->out.urb->transfer_dma = controller->out.dma;
 	controller->out.urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
 
-	/* Populate device capabilities */
-#define SET_BIT(type) __set_bit(type, controller->inputdev->keybit);
-
-	__set_bit(EV_KEY, controller->inputdev->evbit); /* General device that has key presses. */
-	SET_BIT(BTN_A);
-	SET_BIT(BTN_B);
-	SET_BIT(BTN_X);
-	SET_BIT(BTN_Y);
-	SET_BIT(BTN_START);
-	SET_BIT(BTN_SELECT);
-	SET_BIT(BTN_THUMBL);
-	SET_BIT(BTN_THUMBR);
-	SET_BIT(BTN_TL);
-	SET_BIT(BTN_TR);
-	SET_BIT(BTN_MODE);
-
-#undef SET_BIT
-#define SET_BIT(type) \
-	__set_bit(type, controller->inputdev->absbit);\
-	input_set_abs_params(controller->inputdev, type, -32768, 32767, 16, 128);
-
-	/* Axis... */
-	__set_bit(EV_ABS, controller->inputdev->evbit);
-	SET_BIT(ABS_X);
-	SET_BIT(ABS_Y);
-	SET_BIT(ABS_RX);
-	SET_BIT(ABS_RY);
-
-#undef SET_BIT
-#define SET_BIT(type) \
-	__set_bit(type, controller->inputdev->absbit); \
-	input_set_abs_params(controller->inputdev, type, 0, 255, 0, 0);
-
-	/* Triggers... */
-	SET_BIT(ABS_Z);
-	SET_BIT(ABS_RZ);
-
-#undef SET_BIT
-#define SET_BIT(type) __set_bit(type, controller->inputdev->ffbit)
-
-	/* Force Feedback */
-	__set_bit(EV_FF, controller->inputdev->evbit);
-	SET_BIT(FF_RUMBLE);
-
-#undef SET_BIT
-
 	/* Branch code slightly based on wired and wireles. Based on bInterfaceProtocol. */
-	if (protocol == 129) {
-		__set_bit(BTN_TRIGGER_HAPPY1, controller->inputdev->keybit);
-		__set_bit(BTN_TRIGGER_HAPPY2, controller->inputdev->keybit);
-		__set_bit(BTN_TRIGGER_HAPPY3, controller->inputdev->keybit);
-		__set_bit(BTN_TRIGGER_HAPPY4, controller->inputdev->keybit);
+	if (protocol == 129)
 		xpad360wr_query_presence(controller);
-		
-		error = input_ff_create_memless(controller->inputdev, NULL, xpad360wr_rumble);
-		if (error) {
-			dev_dbg(device, "input_ff_create_memless() failed!\n");
-			input_ff_destroy(controller->inputdev);
-			error = 0; /* We can live without FF support. */
-		}
-	}
 	else if (protocol == 1) {
-		__set_bit(ABS_HAT0X, controller->inputdev->absbit); 
-		__set_bit(ABS_HAT0Y, controller->inputdev->absbit); 
-		input_set_abs_params(controller->inputdev, ABS_HAT0X, -1, 1, 0, 0);
-		input_set_abs_params(controller->inputdev, ABS_HAT0Y, -1, 1, 0, 0);
-		controller->present = true;
-		controller->in.urb->complete = xpad360_receive;
-		xpad360_set_led(controller, XPAD360_LED_ON_1);
-		
 		/* Unfortunately, I know of no simple way to change LED based on how many are connected without HID. */
 		error = input_ff_create_memless(controller->inputdev, NULL, xpad360_rumble);
 		if (error) {
@@ -356,11 +344,31 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 		}
 		
 		/* Wired controller only connects once. */
+		controller->inputdev = input_allocate_device();
+		if (unlikely(controller->inputdev == NULL)) {
+			dev_dbg(device, "input_allocate_device failed!\n");
+			goto fail4;
+		}
+		
+		xpad360_common_init_input_dev(controller->inputdev, controller);
+		input_set_abs_params(controller->inputdev, ABS_HAT0X, -1, 1, 0, 0);
+		input_set_abs_params(controller->inputdev, ABS_HAT0Y, -1, 1, 0, 0);
+		__set_bit(ABS_HAT0X, controller->inputdev->absbit); 
+		__set_bit(ABS_HAT0Y, controller->inputdev->absbit);
+		
+		usb_to_input_id(usbdev, &controller->inputdev->id);
+		input_set_drvdata(controller->inputdev, controller);
+		
 		error = input_register_device(controller->inputdev);
 		if (unlikely(error)) {
 			dev_dbg(device, "input_register_device() failed!\n");
-			goto fail5;
+			input_free_device(controller->inputdev);
+			goto fail4;
 		}
+		
+		controller->present = true;
+		controller->in.urb->complete = xpad360_receive;
+		xpad360_set_led(controller, XPAD360_LED_ON_1);
 	}
 	
 	error = usb_submit_urb(controller->in.urb, GFP_KERNEL);
@@ -371,11 +379,9 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 
 	return 0;
 
-fail5:
-	usb_free_urb(controller->out.urb);
+
 fail4:
-	input_ff_destroy(controller->inputdev); 
-	input_free_device(controller->inputdev);
+	usb_free_urb(controller->out.urb);
 fail3:
 	usb_free_urb(controller->in.urb);
 fail2:

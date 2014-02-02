@@ -47,11 +47,12 @@ struct xpad360_request {
 	struct urb *urb;
 };
 
+struct xpad360_controller;
+
 /* This is mostly for wireless devices to dynamically register input */
 struct input_work {
 	struct work_struct work;
-	struct input_dev *inputdev;
-	struct device *device;
+	struct xpad360_controller *controller;
 };
 
 struct xpad360_controller {

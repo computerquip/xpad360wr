@@ -159,7 +159,6 @@ void xpad360wr_receive(struct urb *urb)
 			/* Doesn't seem to mean anything... maybe HID related? */
 			break;
 		case 0x0001:
-			dev_dbg(device, "Reporting %i as D-pad up", data[0] & 0x01);
 			input_report_key(controller->inputdev, BTN_TRIGGER_HAPPY3, data[6] & 0x01); /* D-pad up	 */
 			input_report_key(controller->inputdev, BTN_TRIGGER_HAPPY4, data[6] & 0x02); /* D-pad down */
 			input_report_key(controller->inputdev, BTN_TRIGGER_HAPPY1, data[6] & 0x04); /* D-pad left */
