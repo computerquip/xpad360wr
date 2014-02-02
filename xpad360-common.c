@@ -31,9 +31,6 @@ MODULE_AUTHOR("Zachary Lund <admin@computerquip.com>");
 MODULE_DESCRIPTION("Xbox 360 Wireless Adapter");
 MODULE_LICENSE("GPL");
 
-/*	These are "entry points" to controller specific code. 
- *	Once we throw urbs at this, we never see them again.  
- */
 /* These are functions used but implemented in specific modules. */
 /* They don't belong in a header as they shouldn't be used by any other module.*/
 void xpad360_receive(struct urb* urb);
