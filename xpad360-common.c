@@ -85,23 +85,7 @@ static void xpad360_common_complete(struct urb *urb)
 	struct xpad360_controller *controller = urb->context;
 	struct device *device = &(controller->usbintf->dev);
 
-	switch (urb->status) {
-	case 0:
-		dev_dbg(device, "Sent message to controller successfully!");
-		return;
-	case -ECONNRESET:
-		dev_dbg(device, "Controller has been reset.\n");
-		return;
-	case -ESHUTDOWN:
-		dev_dbg(device, "Controller has shutdown.\n");
-		return;
-	case -ENOENT:
-		dev_dbg(device, "Controller has been poisoned.\n");
-		return;
-	default:
-		dev_dbg(device, "Unknown status returned by controller: %x\n", urb->status);
-		return;
-	}
+	CHECK_URB_STATUS(urb)
 }
 
 /* 

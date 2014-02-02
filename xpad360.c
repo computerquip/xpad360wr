@@ -77,22 +77,7 @@ void xpad360_receive(struct urb* urb) {
 	struct input_dev *inputdev = controller->inputdev;
 	u16 header;
 
-	switch (urb->status) {
-	case 0:
-		break;
-	case -ECONNRESET:
-		dev_dbg(device, "Controller has been reset.\n");
-		return;
-	case -ESHUTDOWN:
-		dev_dbg(device, "Controller has shutdown.\n");
-		return;
-	case -ENOENT:
-		dev_dbg(device, "Controller has been poisoned.\n");
-		return;
-	default:
-		dev_dbg(device, "Unknown status returned by controller: %x\n", urb->status);
-		return;
-	}
+	CHECK_URB_STATUS(urb)
 	
 	header = le16_to_cpup((__le16*)&data[0]);
 	switch (header) {

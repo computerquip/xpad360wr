@@ -5,6 +5,25 @@
 #include <linux/slab.h>
 #include <linux/usb/input.h>
 
+/* Careful, is meant to be called in a void function.  */
+#define CHECK_URB_STATUS(urb) \
+	switch (urb->status) { \
+	case 0: \
+		break; \
+	case -ECONNRESET: \
+		dev_dbg(device, "Controller has been reset.\n");\
+		return; \
+	case -ESHUTDOWN: \
+		dev_dbg(device, "Controller has shutdown.\n"); \
+		return; \
+	case -ENOENT: \
+		dev_dbg(device, "Controller has been poisoned.\n"); \
+		return; \
+	default: \
+		dev_dbg(device, "Unknown status returned by controller: %x\n", urb->status); \
+		return; \
+	} 
+
 enum {
 	XPAD360_LED_OFF,
 	XPAD360_LED_ALL_BLINKING,
@@ -21,13 +40,6 @@ enum {
 	XPAD360_LED_SLOW_SECTIONAL_BLINKING,
 	XPAD360_LED_ALTERNATING
 };
-
-/* Wireless controllers use protocol 129 
- * Wired controllers use protocol 1
- * This should be the same across all Xbox 360 controllers.
- * Other interfaces with different protocols are not controllers. 
- */
-
 
 struct xpad360_request {
 	dma_addr_t dma;

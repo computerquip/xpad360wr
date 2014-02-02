@@ -112,22 +112,7 @@ void xpad360wr_receive(struct urb *urb)
 	unsigned char* data = controller->in.buffer;
 	struct device *device = &(controller->usbintf->dev);
 
-	switch (urb->status) {
-	case 0:
-		break;
-	case -ECONNRESET:
-		dev_dbg(device, "Controller has been reset.\n");
-		return;
-	case -ESHUTDOWN:
-		dev_dbg(device, "Controller has shutdown.\n");
-		return;
-	case -ENOENT:
-		dev_dbg(device, "Controller has been poisoned.\n");
-		return;
-	default:
-		dev_dbg(device, "Unknown status returned by controller: %x\n", urb->status);
-		return;
-	}
+	CHECK_URB_STATUS(urb)
 
 	/* Event from Wireless Receiver */
 	if (data[0] == 0x08 && urb->actual_length == 2) {
