@@ -47,20 +47,6 @@ static struct usb_device_id xpad360_table[] = {
 	{}
 };
 
-void xpad360_common_register_input_work(struct work_struct* work)
-{
-	struct input_work *inputwork = (struct input_work*)work;
-
-	input_register_device(inputwork->inputdev);
-}
-
-void xpad360_common_unregister_input_work(struct work_struct* work)
-{
-	struct input_work *inputwork = (struct input_work*)work;
-
-	input_unregister_device(inputwork->inputdev);
-}
-
 static int xpad360_controller_open(struct input_dev* dev)
 {
 	struct xpad360_controller *controller = input_get_drvdata(dev);
@@ -86,6 +72,46 @@ static void xpad360_controller_close(struct input_dev* dev)
 
 	dev_dbg(device, "Closing controller.");
 	/* We cannot stop inquiring packets as connection packets are sent from the same interface. */
+}
+
+void xpad360_common_init_input_dev(struct input_dev *inputdev, struct xpad360_controller *controller)
+{
+	struct device *device = &controller->usbintf->device;
+	struct usb_device = interface_to_usbdev(controller->usbintf);
+
+		/* Initialize input device */
+	inputdev->name = usbdev->product;
+	inputdev->phys = controller->path;
+	inputdev->dev.parent = device;
+	inputdev->open = xpad360_controller_open;
+	inputdev->close = xpad360_controller_close;
+}
+
+void xpad360_common_register_input_work(struct work_struct* work)
+{
+	struct input_work *inputwork = (struct input_work*)work;
+	int error = 0;
+
+	inputwork->inputdev = devm_input_allocate_device(inputwork->device);
+
+	if (unlikely(inputwork->inputdev == NULL)) {
+		dev_dbg(inputwork->device, "devm_input_allocate_device failed!\n");
+		return;
+	}
+
+	error = input_register_device(inputwork->inputdev);
+
+	if (unlikely(error)) {
+		dev_dbg(inputwork->device, "input_register_device() failed!\n");
+		return;
+	}
+}
+
+void xpad360_common_unregister_input_work(struct work_struct* work)
+{
+	struct input_work *inputwork = (struct input_work*)work;
+
+	input_unregister_device(inputwork->inputdev);
 }
 
 static void xpad360_common_complete(struct urb *urb)
@@ -162,7 +188,10 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 	}
 	
 	controller->register_input.inputdev = controller->inputdev;
+	controller->register_input.device = device;
+
 	controller->unregister_input.inputdev = controller->inputdev;
+	controller->unregister_input.device = device;
 
 	INIT_WORK((struct work_struct *)&controller->register_input, xpad360_common_register_input_work);
 	INIT_WORK((struct work_struct *)&controller->unregister_input, xpad360_common_unregister_input_work);
@@ -210,13 +239,6 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 		goto fail3;
 	}
 
-	/* Initialize input device */
-	controller->inputdev->name = usbdev->product;
-	controller->inputdev->phys = controller->path;
-	controller->inputdev->dev.parent = device;
-	controller->inputdev->open = xpad360_controller_open;
-	controller->inputdev->close = xpad360_controller_close;
-
 	usb_to_input_id(usbdev, &controller->inputdev->id);
 
 
@@ -228,7 +250,9 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 		usb_make_path(usbdev, controller->path, sizeof(controller->path));
 		strlcat(controller->path, tmp, sizeof(controller->path));
 	}
-	
+
+	xpad360_common_init_input_dev(controller->inputdev, controller);
+
 	input_set_drvdata(controller->inputdev, controller);
 	usb_set_intfdata(interface, controller);
 
