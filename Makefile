@@ -1,3 +1,5 @@
+EXTRA_CFLAGS = "-DDEBUG"
+
 obj-m += xpad360-all.o
 
 xpad360-all-y := xpad360-common.o xpad360wr.o xpad360.o

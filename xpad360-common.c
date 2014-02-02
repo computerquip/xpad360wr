@@ -23,8 +23,6 @@
  *	This file contains shared code among xpad controllers. 
  *	It handles things that never change among any xbox 360 gamepad. 
  */
-
-#define DEBUG
 #include "xpad360-common.h"
 
 MODULE_AUTHOR("Zachary Lund <admin@computerquip.com>");
@@ -49,8 +47,21 @@ static struct usb_device_id xpad360_table[] = {
 	{}
 };
 
+void xpad360_common_register_input_work(struct work_struct* work)
+{
+	struct input_work *inputwork = (struct input_work*)work;
 
-int xpad360_controller_open(struct input_dev* dev)
+	input_register_device(inputwork->inputdev);
+}
+
+void xpad360_common_unregister_input_work(struct work_struct* work)
+{
+	struct input_work *inputwork = (struct input_work*)work;
+
+	input_unregister_device(inputwork->inputdev);
+}
+
+static int xpad360_controller_open(struct input_dev* dev)
 {
 	struct xpad360_controller *controller = input_get_drvdata(dev);
 	struct device *device = &(controller->usbintf->dev);
@@ -68,7 +79,7 @@ int xpad360_controller_open(struct input_dev* dev)
 	return 0;
 }
 
-void xpad360_controller_close(struct input_dev* dev)
+static void xpad360_controller_close(struct input_dev* dev)
 {
 	struct xpad360_controller *controller = input_get_drvdata(dev);
 	struct device *device = &(controller->usbintf->dev);
@@ -124,7 +135,7 @@ void xpad360_common_parse_input(struct xpad360_controller *controller, void *_da
 	input_sync(inputdev);
 }
 
-int xpad360_common_probe(struct usb_interface *interface, const struct usb_device_id *id)
+static int xpad360_common_probe(struct usb_interface *interface, const struct usb_device_id *id)
 {
 	struct usb_device * usbdev = interface_to_usbdev(interface);
 	struct usb_endpoint_descriptor *ep_in = &(interface->cur_altsetting->endpoint[0].desc);
@@ -143,13 +154,19 @@ int xpad360_common_probe(struct usb_interface *interface, const struct usb_devic
 	controller->usbintf = interface;
 	
 	/* Allocate input structure */
-	controller->inputdev = input_allocate_device();
+	controller->inputdev = devm_input_allocate_device(device);
 	
 	if (unlikely(controller->inputdev == NULL)) {
 		error = -ENOMEM;
 		goto fail0;
 	}
 	
+	controller->register_input.inputdev = controller->inputdev;
+	controller->unregister_input.inputdev = controller->inputdev;
+
+	INIT_WORK((struct work_struct *)&controller->register_input, xpad360_common_register_input_work);
+	INIT_WORK((struct work_struct *)&controller->unregister_input, xpad360_common_unregister_input_work);
+
 	/* Allocate in and out buffers*/
 	controller->in.buffer =
 		usb_alloc_coherent(
@@ -364,7 +381,9 @@ void xpad360_common_disconnect(struct usb_interface* interface)
 	int protocol = interface->cur_altsetting->desc.bInterfaceProtocol;
 	
 	dev_dbg(device, "Controller disconnected.\n");
-	
+
+	flush_scheduled_work();
+
 	if (controller->present) {
 		input_unregister_device(controller->inputdev);
 		
@@ -380,8 +399,6 @@ void xpad360_common_disconnect(struct usb_interface* interface)
 	usb_kill_urb(controller->in.urb);
 	usb_kill_urb(controller->out.urb);
 	
-
-
 	usb_free_coherent(
 		usbdev,
 		interface->cur_altsetting->endpoint[0].desc.wMaxPacketSize,

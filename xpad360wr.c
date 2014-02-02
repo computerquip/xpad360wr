@@ -119,15 +119,21 @@ void xpad360wr_receive(struct urb *urb)
 		switch (data[1]) {
 		case 0x00:
 			/* Controller disconnected */
-			controller->present = false;
-			dev_dbg(device, "Controller has been disconnected!\n");
+			if (controller->present) {
+				controller->present = false;
+				schedule_work((struct work_struct *)&controller->unregister_input);
+				dev_dbg(device, "Controller has been disconnected!\n");
+			}
 			break;
 
 		case 0x80:
 			/* Controller connected */
-			xpad360wr_set_led(controller, controller->num_controller + 6);
-			controller->present = true;
-			dev_dbg(device, "Controller has been connected!\n");
+			if (!controller->present) {
+				xpad360wr_set_led(controller, controller->num_controller + 6);
+				controller->present = true;
+				schedule_work((struct work_struct *)&controller->register_input); /* Register input device */
+				dev_dbg(device, "Controller has been connected!\n");
+			}
 			break;
 
 		case 0x40:
