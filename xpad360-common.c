@@ -2,16 +2,21 @@
 	TODO:
 	Headsets
 	
-	I essentially recreate an hid_device since the controller is an hid_device...
-	but reports 0xff as bInterfaceClass so it cannot be probed as one in current Linux hid subsystem. 
-	I also do not think I can use hid functionality without going through more trouble than its worth. 
-	
-	NOTE:
-	Shoutout to xpad and xboxdrv for whatever work is resembling theirs.
-	Also, keep in mind that the Xbox 360 controllers are HID compliant which is what the packets are based on.
-	xpad360 functions pertain to wired controller, xpad360wr pertain to wireless. We don't support original yet. 
-	However, common functions are xpad360_common and types are just prefixed with xpad360.
-	There are no controller specific structs as we're basically just recreating an hid_device struct more tailored to our driver. 
+	NOTES:
+	I'm forgetting the idea that the controller is HID compliant. 
+	While other drivers do use a filter driver for HID, we do not as it's inconvenient. 
+	It doesn't make anything less painful, especially since Linux doesn't have a filter driver. 
+
+	PROBLEMS:
+	There's an issue concerning interfaces. It's not a reliable method
+	on determining controller number. There's actually a few reliable ways
+	to confuse the driver and mix up controller numbers. 
+
+	There's also data that I don't know how to interpret yet. 
+	I'm assuming the announce has data in it that's obfuscated. 
+	In order to reverse engineer that data, I need to work with the 
+	XInput driver and feed it various values to see what it gives me. 
+	I can't do this at the moment, I don't know how to go about it. 
 */
 
 /*
