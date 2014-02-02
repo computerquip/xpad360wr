@@ -335,19 +335,18 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 	if (protocol == 129)
 		xpad360wr_query_presence(controller);
 	else if (protocol == 1) {
-		/* Unfortunately, I know of no simple way to change LED based on how many are connected without HID. */
-		error = input_ff_create_memless(controller->inputdev, NULL, xpad360_rumble);
-		if (error) {
-			dev_dbg(device, "input_ff_create_memless() failed!\n");
-			input_ff_destroy(controller->inputdev);
-			error = 0; /* We can live without FF support. */
-		}
-		
 		/* Wired controller only connects once. */
 		controller->inputdev = input_allocate_device();
 		if (unlikely(controller->inputdev == NULL)) {
 			dev_dbg(device, "input_allocate_device failed!\n");
 			goto fail4;
+		}
+		
+		error = input_ff_create_memless(controller->inputdev, NULL, xpad360_rumble);
+		if (error) {
+			dev_dbg(device, "input_ff_create_memless() failed!\n");
+			input_ff_destroy(controller->inputdev);
+			error = 0; /* We can live without FF support. */
 		}
 		
 		xpad360_common_init_input_dev(controller->inputdev, controller);
