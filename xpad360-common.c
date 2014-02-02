@@ -113,17 +113,9 @@ void xpad360_common_parse_input(struct xpad360_controller *controller, void *_da
 	input_report_key(inputdev, BTN_X,	data[1] & 0x40);
 	input_report_key(inputdev, BTN_Y,	data[1] & 0x80);
 
-	/* triggers */
-#if 1
 	input_report_abs(inputdev, ABS_Z, data[2]);
 	input_report_abs(inputdev, ABS_RZ, data[3]);
-#else /* This code was something I tested with Psychonauts... it makes the camera work out of the box but I still can't figure out wth they are expecting.  */
-	{ 
-		int left = ~(data[2] / 2);
-		int right = (data[3] / 2);
-		input_report_abs(inputdev, ABS_Z, (left + right) + 128);
-	}
-#endif
+
 	/* left stick */
 	input_report_abs(inputdev, ABS_X, (s16)le16_to_cpup((__le16*)&data[4]));
 	input_report_abs(inputdev, ABS_Y, ~(s16)le16_to_cpup((__le16*)&data[6]));
