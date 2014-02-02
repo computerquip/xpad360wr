@@ -25,11 +25,6 @@
  */
 
 #define DEBUG
-#include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/slab.h>
-#include <linux/usb/input.h>
-
 #include "xpad360-common.h"
 
 MODULE_AUTHOR("Zachary Lund <admin@computerquip.com>");
