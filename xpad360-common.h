@@ -54,7 +54,7 @@ struct xpad360_request {
 
 struct xpad360_controller;
 
-/* This is mostly for wireless devices to dynamically register input */
+/* This is mostly for wireless devices to dynamically register input devices */
 struct input_work {
 	struct work_struct work;
 	struct xpad360_controller *controller;
@@ -84,7 +84,7 @@ int xpad360_common_init_request(
 	struct xpad360_request *request, 
 	struct usb_interface *intf, 
 	int direction, 
-	void(*callback)(struct urb*) /* May be NULL for generic handling */
+	void(*callback)(struct urb*) /* May be NULL for generic handling if direction is XPAD360_EP_OUT */
 );
 
 void xpad360_common_destroy_request(
