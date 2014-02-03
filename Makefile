@@ -1,4 +1,4 @@
-EXTRA_CFLAGS = "-DDEBUG"
+EXTRA_CFLAGS = "-DDEBUG -fsanitize=threads"
 
 obj-m += xpad360.o
 
