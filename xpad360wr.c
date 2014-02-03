@@ -113,13 +113,13 @@ static void xpad360wr_register_input_work(struct work_struct* work)
 	struct device *device = &inputwork->controller->usbintf->dev;
 	int error = 0;
 
-	dev_dbg(device, "Registering input device...");
+	printk(KERN_INFO "Registering input device...");
 	
 	/* We assume that inputdev has already been unregistered. */
 	controller->inputdev = input_allocate_device();
 
 	if (unlikely(controller->inputdev == NULL)) {
-		dev_dbg(device, "input_allocate_device failed!\n");
+		printk(KERN_ERR "input_allocate_device failed!\n");
 		return;
 	}
 	
@@ -131,14 +131,14 @@ static void xpad360wr_register_input_work(struct work_struct* work)
 
 	error = input_ff_create_memless(controller->inputdev, NULL, xpad360wr_rumble);
 	if (error) {
-		dev_dbg(device, "input_ff_create_memless() failed!\n");
+		printk(KERN_ERR  "input_ff_create_memless() failed!\n");
 		error = 0; /* We can live without FF support. */
 	}
 	
 	error = input_register_device(controller->inputdev);
 
 	if (unlikely(error)) {
-		dev_dbg(device, "input_register_device() failed!\n");
+		printk(KERN_ERR "input_register_device() failed!\n");
 		return;
 	}
 }
@@ -148,7 +148,7 @@ static void xpad360wr_unregister_input_work(struct work_struct* work)
 	struct input_work *inputwork = (struct input_work*)work;
 	struct device *device = &inputwork->controller->usbintf->dev;
 
-	dev_dbg(device, "Unregistering input device...");
+	printk(KERN_INFO "Unregistering input device...");
 	input_unregister_device(inputwork->controller->inputdev);
 }
 
@@ -168,7 +168,7 @@ void xpad360wr_receive(struct urb *urb)
 			if (controller->present) {
 				controller->present = false;
 				schedule_work((struct work_struct *)&controller->unregister_input);
-				dev_dbg(device, "Controller has been disconnected!\n");
+				printk(KERN_INFO "Controller has been disconnected!\n");
 			}
 			break;
 
@@ -178,19 +178,19 @@ void xpad360wr_receive(struct urb *urb)
 				xpad360wr_set_led(controller, controller->num_controller + 6);
 				controller->present = true;
 				schedule_work((struct work_struct *)&controller->register_input);
-				dev_dbg(device, "Controller has been connected!\n");
+				printk(KERN_INFO "Controller has been connected!\n");
 			}
 			break;
 
 		case 0x40:
 			/* Headset connected */
-			dev_dbg(device, "Controller has connected a headset!\n");
+			printk(KERN_INFO "Controller has connected a headset!\n");
 			break;
 
 		case 0xC0:
 			/* Controller with headset connect */
 			controller->present = true;
-			dev_dbg(device, "Controller has connected with a headset!\n");
+			printk(KERN_INFO "Controller has connected with a headset!\n");
 			break;
 		default:
 			dev_dbg(device, "Unknown packet received. Length was 2, header was %#.2x\n", data[1]);
@@ -246,7 +246,7 @@ void xpad360wr_receive(struct urb *urb)
 	}
 
 	if (unlikely(usb_submit_urb(urb, GFP_ATOMIC) != 0)) {
-		dev_dbg(device, "usb_submit_urb() failed in receive()!");
+		printk(KERN_ERR "usb_submit_urb() failed in receive()!");
 	}
 }
 
@@ -282,7 +282,7 @@ int xpad360wr_init(struct xpad360_controller *controller)
 	);
 	
 	if (error) {
-		dev_dbg(device, "controller->in failed to init!");
+		printk(KERN_ERR "controller->in failed to init!");
 		return error;
 	}
 	
@@ -294,7 +294,7 @@ int xpad360wr_init(struct xpad360_controller *controller)
 	);
 	
 	if (error) {
-		dev_dbg(device, "controller->out_presence failed to init!");
+		printk(KERN_ERR "controller->out_presence failed to init!");
 		goto fail;
 	}
 	
