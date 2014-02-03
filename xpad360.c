@@ -118,6 +118,11 @@ int xpad360_init(struct xpad360_controller *controller)
 	struct device *device = &(controller->usbintf->dev);
 	int error = 0;
 	
+	dev_dbg(device, "Initializing xpad360 wired controller...");
+	
+	usb_make_path(interface_to_usbdev(controller->usbintf), controller->path, sizeof(controller->path));
+	strlcat(controller->path, "/input0", sizeof(controller->path));
+	
 	/* Wired controller only connects once. */
 	controller->inputdev = input_allocate_device();
 	if (unlikely(controller->inputdev == NULL)) {

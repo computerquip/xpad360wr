@@ -309,15 +309,6 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 		dev_dbg(device, "controller->out_rumble failed to init!");
 		goto fail1;
 	}
-	
-	controller->num_controller = (interface->cur_altsetting->desc.bInterfaceNumber + 1) / 2;
-	
-	{
-		char tmp[8];
-		snprintf(tmp, sizeof(tmp), "/input%.1i", controller->num_controller);
-		usb_make_path(usbdev, controller->path, sizeof(controller->path));
-		strlcat(controller->path, tmp, sizeof(controller->path));
-	}
 
 	/* Branch code slightly based on wired and wireless. Based on bInterfaceProtocol. */
 	switch (protocol) {

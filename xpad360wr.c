@@ -172,6 +172,7 @@ void xpad360wr_receive(struct urb *urb)
 	if (data[0] == 0x08 && urb->actual_length == 2) {
 		switch (data[1]) {
 		case 0x00:
+			dev_dbg(device, "Disconnection packet recieved!");
 			/* Controller disconnected */
 			if (controller->present) {
 				controller->present = false;
@@ -181,6 +182,7 @@ void xpad360wr_receive(struct urb *urb)
 			break;
 
 		case 0x80:
+			dev_dbg(device, "Connection packet recieved!");
 			/* Controller connected */
 			if (!controller->present) {
 				xpad360wr_set_led(controller, controller->num_controller + 6);
@@ -263,11 +265,22 @@ int xpad360wr_init(struct xpad360_controller *controller)
 	struct device *device = &(controller->usbintf->dev);
 	int error = 0;
 	
+	dev_dbg(device, "Initializing xpad360wr controller...");
+	
 	register_input.controller = controller;
 	unregister_input.controller = controller;
 	
 	INIT_WORK((struct work_struct *)&register_input, xpad360wr_register_input_work);
 	INIT_WORK((struct work_struct *)&unregister_input, xpad360wr_unregister_input_work);
+	
+	controller->num_controller = (controller->usbintf->cur_altsetting->desc.bInterfaceNumber + 1) / 2;
+	
+	{
+		char tmp[8];
+		snprintf(tmp, sizeof(tmp), "/input%.1i", controller->num_controller);
+		usb_make_path(interface_to_usbdev(controller->usbintf), controller->path, sizeof(controller->path));
+		strlcat(controller->path, tmp, sizeof(controller->path));
+	}
 	
 	/* Allocate presence urb, special to the wireless adapter. */
 	error = xpad360_common_init_request(
