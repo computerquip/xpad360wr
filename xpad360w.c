@@ -95,18 +95,15 @@ void xpad360_receive(struct urb* urb) {
 		input_report_abs(inputdev, ABS_HAT0X, !!(data[2] & 0x08) - !!(data[2] & 0x04));
 		input_report_abs(inputdev, ABS_HAT0Y, !!(data[2] & 0x02) - !!(data[2] & 0x01));
 		xpad360_common_parse_input(controller, &data[2]);
-		dev_dbg(device, "Length was %i\n", urb->actual_length);
 		break;
-	default: {
-		int i = 0;
+	default: 
+		dev_dbg(device, "Unknown packet received: "
+				"Header: %#.4x "
+				"Data: %#x",
+				header,
+				(unsigned int)*data
+		);
 		
-		dev_dbg(device, "Unknown packet received: ");
-		
-		for (; i < urb->actual_length; ++i) 
-			dev_dbg(device, "%#x ", (unsigned int)data[i]);
-		
-		dev_dbg(device, "\n");
-	}
 	}
 	
 	if (unlikely(usb_submit_urb(urb, GFP_ATOMIC) != 0)) {

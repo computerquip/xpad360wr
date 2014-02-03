@@ -164,7 +164,6 @@ void xpad360wr_receive(struct urb *urb)
 	if (data[0] == 0x08 && urb->actual_length == 2) {
 		switch (data[1]) {
 		case 0x00:
-			dev_dbg(device, "Disconnection packet recieved!");
 			/* Controller disconnected */
 			if (controller->present) {
 				controller->present = false;
@@ -174,7 +173,6 @@ void xpad360wr_receive(struct urb *urb)
 			break;
 
 		case 0x80:
-			dev_dbg(device, "Connection packet recieved!");
 			/* Controller connected */
 			if (!controller->present) {
 				xpad360wr_set_led(controller, controller->num_controller + 6);
