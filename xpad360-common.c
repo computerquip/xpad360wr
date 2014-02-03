@@ -293,7 +293,7 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 	);
 	
 	if (unlikely(error)){
-		printk(KERN_ERR "controller->out_led failed to init!");
+		dev_err(device, "controller->out_led failed to init!");
 		goto fail0;
 	}
 	
@@ -305,7 +305,7 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 	);
 	
 	if (unlikely(error)){
-		printk(KERN_ERR "controller->out_rumble failed to init!");
+		dev_err(device, "controller->out_rumble failed to init!");
 		goto fail1;
 	}
 
@@ -326,7 +326,7 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 	
 	error = usb_submit_urb(controller->in.urb, GFP_KERNEL);
 	if (unlikely(error)) {
-		printk(KERN_ERR "usb_submit_urb(controller->in.urb) failed!\n");
+		dev_err(device, "usb_submit_urb(controller->in.urb) failed!\n");
 		goto fail3;
 	}
 
@@ -365,7 +365,7 @@ void xpad360_common_disconnect(struct usb_interface* interface)
 	struct device *device = &(controller->usbintf->dev);
 	int protocol = interface->cur_altsetting->desc.bInterfaceProtocol;
 	
-	printk(KERN_INFO "Controller disconnected.\n");
+	dev_info(device, "Controller disconnected.\n");
 	
 	switch (protocol) {
 	case 129:
