@@ -5,7 +5,7 @@ int xpad360_rumble(struct input_dev *dev, void* stuff, struct ff_effect *effect)
 	struct xpad360_controller *controller = input_get_drvdata(dev);
 
 	if (effect->type == FF_RUMBLE) {
-		u8 *data = controller->out.buffer;
+		u8 *data = controller->out_rumble.buffer;
 		u16 strong = effect->u.rumble.strong_magnitude;
 		u16 weak = effect->u.rumble.weak_magnitude;
 		
@@ -17,11 +17,11 @@ int xpad360_rumble(struct input_dev *dev, void* stuff, struct ff_effect *effect)
 		data[5] = 0x00;
 		data[6] = 0x00;
 		data[7] = 0x00;
-		controller->out.urb->transfer_buffer_length = 8;
+		controller->out_rumble.urb->transfer_buffer_length = 8;
 	}
 	else return -1;
 	
-	if (unlikely(usb_submit_urb(controller->out.urb, GFP_ATOMIC) != 0)) {
+	if (unlikely(usb_submit_urb(controller->out_rumble.urb, GFP_ATOMIC) != 0)) {
 		dev_dbg(&(controller->usbintf->dev), "usb_submit_urb() failed in play_effect()!");
 		return -1;
 	}
@@ -60,12 +60,12 @@ void xpad360_set_led_sync(struct xpad360_controller *controller, u8 status) {
 
 void xpad360_set_led(struct xpad360_controller *controller, u8 status) 
 {
-	u8 *data = controller->out.buffer;
+	u8 *data = controller->out_led.buffer;
 	
 	_xpad360_generate_led_packet(data, status);
-	controller->out.urb->transfer_buffer_length = 3;
+	controller->out_led.urb->transfer_buffer_length = 3;
 
-	if (unlikely(usb_submit_urb(controller->out.urb, GFP_ATOMIC) != 0)) {
+	if (unlikely(usb_submit_urb(controller->out_led.urb, GFP_ATOMIC) != 0)) {
 		dev_dbg(&(controller->usbintf->dev), "usb_submit_urb() failed in set_led()!");
 	}
 }
@@ -97,11 +97,81 @@ void xpad360_receive(struct urb* urb) {
 		xpad360_common_parse_input(controller, &data[2]);
 		dev_dbg(device, "Length was %i\n", urb->actual_length);
 		break;
-	default:
-		dev_dbg(device, "Unknown packet received. Length was %i... what about the header...?", urb->actual_length);
+	default: {
+		int i = 0;
+		
+		dev_dbg(device, "Unknown packet received: ");
+		
+		for (; i < urb->actual_length; ++i) 
+			dev_dbg(device, "%#x ", (unsigned int)data[i]);
+		
+		dev_dbg(device, "\n");
+	}
 	}
 	
 	if (unlikely(usb_submit_urb(urb, GFP_ATOMIC) != 0)) {
 		dev_dbg(device, "usb_submit_urb() failed in receive()!");
 	}
+}
+int xpad360_init(struct xpad360_controller *controller)
+{
+	struct device *device = &(controller->usbintf->dev);
+	int error = 0;
+	
+	/* Wired controller only connects once. */
+	controller->inputdev = input_allocate_device();
+	if (unlikely(controller->inputdev == NULL)) {
+		dev_dbg(device, "input_allocate_device failed!\n");
+		return -ENOMEM;
+	}
+	
+	error = input_ff_create_memless(controller->inputdev, NULL, xpad360_rumble);
+	if (error) {
+		dev_dbg(device, "input_ff_create_memless() failed!\n");
+		input_ff_destroy(controller->inputdev);
+		error = 0; /* We can live without FF support. */
+	}
+	
+	xpad360_common_init_input_dev(controller->inputdev, controller);
+	input_set_abs_params(controller->inputdev, ABS_HAT0X, -1, 1, 0, 0);
+	input_set_abs_params(controller->inputdev, ABS_HAT0Y, -1, 1, 0, 0);
+	__set_bit(ABS_HAT0X, controller->inputdev->absbit); 
+	__set_bit(ABS_HAT0Y, controller->inputdev->absbit);
+
+	error = input_register_device(controller->inputdev);
+	if (unlikely(error)) {
+		dev_dbg(device, "input_register_device() failed!\n");
+		goto fail;
+	}
+	
+	error = xpad360_common_init_request(
+		&controller->in,
+		controller->usbintf,
+		XPAD360_EP_IN,
+		xpad360_receive
+	);
+	
+	if (error) {
+		dev_dbg(device, "controller->in failed to init!");
+		goto fail;
+	}
+		
+	controller->present = true;
+	xpad360_set_led(controller, XPAD360_LED_ON_1);
+	
+	goto success;
+	
+fail:
+	input_free_device(controller->inputdev);
+success:
+	return error;
+}
+
+void xpad360_destroy(struct xpad360_controller *controller) 
+{
+	struct usb_device *usbdev = interface_to_usbdev(controller->usbintf);
+	input_unregister_device(controller->inputdev);
+		
+	if (usbdev->state != USB_STATE_NOTATTACHED )
+		xpad360_set_led_sync(controller, XPAD360_LED_ROTATING);
 }

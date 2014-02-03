@@ -25,6 +25,11 @@
 	} 
 
 enum {
+	XPAD360_EP_OUT,
+	XPAD360_EP_IN
+};
+	
+enum {
 	XPAD360_LED_OFF,
 	XPAD360_LED_ALL_BLINKING,
 	XPAD360_LED_FLASH_ON_1,
@@ -50,15 +55,8 @@ struct xpad360_request {
 struct xpad360_controller;
 
 /* This is mostly for wireless devices to dynamically register input */
-struct input_work {
-	struct work_struct work;
-	struct xpad360_controller *controller;
-};
 
 struct xpad360_controller {
-	struct input_work register_input;
-	struct input_work unregister_input;
-
 	bool present;
 	uint8_t num_controller;
 
@@ -66,9 +64,28 @@ struct xpad360_controller {
 	struct usb_interface *usbintf;
 
 	struct xpad360_request in;
-	struct xpad360_request out;
+	
+	/* Instead of setting up syncronization, we just allocate fresh resources per controller. */
+	struct xpad360_request out_led;
+	struct xpad360_request out_rumble;
+	struct xpad360_request out_presence;
 
 	char path[64]; /* Physical stable path we can reference to */
 };
 
+int xpad360_common_init_request(
+	struct xpad360_request *request, 
+	struct usb_interface *intf, 
+	int direction, 
+	void(*callback)(struct urb*) /* May be NULL for generic handling */
+);
+
+void xpad360_common_destroy_request(
+	struct xpad360_request *request, 
+	struct usb_interface *intf,
+	int direction
+);
+
+void xpad360_common_complete(struct urb *urb);
 void xpad360_common_parse_input(struct xpad360_controller *controller, void *_data);
+void xpad360_common_init_input_dev(struct input_dev *inputdev, struct xpad360_controller *controller);

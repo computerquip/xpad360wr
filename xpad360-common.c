@@ -31,15 +31,11 @@ MODULE_LICENSE("GPL");
 
 /* These are functions used but implemented in specific modules. */
 /* They don't belong in a header as they shouldn't be used by any other module.*/
-void xpad360_receive(struct urb* urb);
-void xpad360_set_led(struct xpad360_controller *controller, u8 status);
-void xpad360_set_led_sync(struct xpad360_controller *controller, u8 status);
-int xpad360_rumble(struct input_dev *dev, void* stuff, struct ff_effect *effect);
+int xpad360_init(struct xpad360_controller *controller);
+void xpad360_destroy(struct xpad360_controller *controller);
 
-void xpad360wr_receive(struct urb* urb);
-void xpad360wr_set_led_sync(struct xpad360_controller *controller, u8 status);
-void xpad360wr_query_presence(struct xpad360_controller *controller);
-int xpad360wr_rumble(struct input_dev *dev, void *stuff, struct ff_effect *effect);
+int xpad360wr_init(struct xpad360_controller *controller);
+void xpad360wr_destroy(struct xpad360_controller *controller);
 
 static struct usb_device_id xpad360_table[] = {
 	{ USB_DEVICE_INTERFACE_PROTOCOL(0x045E, 0x0719, 129) },
@@ -139,53 +135,7 @@ void xpad360_common_init_input_dev(struct input_dev *inputdev, struct xpad360_co
 	input_set_drvdata(controller->inputdev, controller);
 }
 
-void xpad360_common_register_input_work(struct work_struct* work)
-{
-	struct input_work *inputwork = (struct input_work*)work;
-	struct xpad360_controller *controller = inputwork->controller;
-	struct device *device = &inputwork->controller->usbintf->dev;
-	int error = 0;
-
-	dev_dbg(device, "Registering input device...");
-	
-	/* We assume that inputdev has already been unregistered. */
-	controller->inputdev = input_allocate_device();
-
-	if (unlikely(controller->inputdev == NULL)) {
-		dev_dbg(device, "input_allocate_device failed!\n");
-		return;
-	}
-	
-	xpad360_common_init_input_dev(controller->inputdev, controller);
-	__set_bit(BTN_TRIGGER_HAPPY1, controller->inputdev->keybit);
-	__set_bit(BTN_TRIGGER_HAPPY2, controller->inputdev->keybit);
-	__set_bit(BTN_TRIGGER_HAPPY3, controller->inputdev->keybit);
-	__set_bit(BTN_TRIGGER_HAPPY4, controller->inputdev->keybit);
-
-	error = input_ff_create_memless(controller->inputdev, NULL, xpad360wr_rumble);
-	if (error) {
-		dev_dbg(device, "input_ff_create_memless() failed!\n");
-		error = 0; /* We can live without FF support. */
-	}
-	
-	error = input_register_device(controller->inputdev);
-
-	if (unlikely(error)) {
-		dev_dbg(device, "input_register_device() failed!\n");
-		return;
-	}
-}
-
-void xpad360_common_unregister_input_work(struct work_struct* work)
-{
-	struct input_work *inputwork = (struct input_work*)work;
-	struct device *device = &inputwork->controller->usbintf->dev;
-
-	dev_dbg(device, "Unregistering input device...");
-	input_unregister_device(inputwork->controller->inputdev);
-}
-
-static void xpad360_common_complete(struct urb *urb)
+void xpad360_common_complete(struct urb *urb)
 {
 	struct xpad360_controller *controller = urb->context;
 	struct device *device = &(controller->usbintf->dev);
@@ -232,11 +182,95 @@ void xpad360_common_parse_input(struct xpad360_controller *controller, void *_da
 	input_sync(inputdev);
 }
 
+int xpad360_common_init_request(
+	struct xpad360_request *request, 
+	struct usb_interface *intf, 
+	int direction, 
+	void(*callback)(struct urb*))
+{
+	struct usb_device * usbdev = interface_to_usbdev(intf);
+	struct usb_endpoint_descriptor *ep = &(intf->cur_altsetting->endpoint[direction].desc);
+	void *data = usb_get_intfdata(intf);
+	int error = 0;
+	
+	/* Allocate URB buffer */
+	request->buffer =
+		usb_alloc_coherent(
+			usbdev,
+			ep->wMaxPacketSize,
+			GFP_KERNEL,
+			&(request->dma)
+		);
+		
+	if (unlikely(!request->buffer)) {
+		error = -ENOMEM;
+		return error;
+	}
+	
+	/* Allocate URB */
+	request->urb = usb_alloc_urb(0, GFP_KERNEL);
+	
+	if (unlikely(!request->urb)) {
+		error = -ENOMEM;
+		goto fail;
+	}
+	
+	/* Fill URB struct */
+	if (direction == XPAD360_EP_IN) {
+		usb_fill_int_urb(
+			request->urb, usbdev,
+			usb_rcvintpipe(usbdev, ep->bEndpointAddress),
+			request->buffer, ep->wMaxPacketSize, 
+			callback, data, ep->bInterval
+		);
+	} else if (direction == XPAD360_EP_OUT) {
+		usb_fill_int_urb(
+			request->urb, usbdev,
+			usb_sndintpipe(usbdev, ep->bEndpointAddress),
+			request->buffer, ep->wMaxPacketSize,
+			callback ? callback : xpad360_common_complete, 
+			data, ep->bInterval
+		);
+	}
+	
+	request->urb->transfer_dma = request->dma;
+	request->urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
+	
+	goto success;
+fail:
+	usb_free_coherent(
+		usbdev,
+		ep->wMaxPacketSize,
+		request->buffer,
+		request->dma
+	);
+	
+success:
+	return error;
+}
+
+void xpad360_common_destroy_request(
+	struct xpad360_request *request, 
+	struct usb_interface *intf,
+	int direction)
+{
+	struct usb_device *usbdev = interface_to_usbdev(intf);
+	
+	usb_kill_urb(request->urb);
+	
+	usb_free_coherent(
+		usbdev,
+		intf->cur_altsetting->endpoint[direction].desc.wMaxPacketSize,
+		request->buffer,
+		request->dma
+	);
+	
+	usb_free_urb(request->urb);
+}
+
 static int xpad360_common_probe(struct usb_interface *interface, const struct usb_device_id *id)
 {
 	struct usb_device * usbdev = interface_to_usbdev(interface);
-	struct usb_endpoint_descriptor *ep_in = &(interface->cur_altsetting->endpoint[0].desc);
-	struct usb_endpoint_descriptor *ep_out = &(interface->cur_altsetting->endpoint[1].desc);
 	struct xpad360_controller *controller = kzalloc(sizeof(struct xpad360_controller), GFP_KERNEL);
 	struct device *device = &(interface->dev);
 	int protocol = interface->cur_altsetting->desc.bInterfaceProtocol;
@@ -244,61 +278,38 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 	
 	dev_dbg(device, "Device: %s\nSerial: %s\n", usbdev->product, usbdev->serial);
 	
-	if (!controller) {
+	if (unlikely(!controller)) {
 		return -ENOMEM;
 	}
 	
+	/* Make sure we have access to the controller and interface its on. */
+	usb_set_intfdata(interface, controller);
 	controller->usbintf = interface;
 	
-	controller->register_input.controller = controller;
-	controller->unregister_input.controller = controller;
-
-	INIT_WORK((struct work_struct *)&controller->register_input, xpad360_common_register_input_work);
-	INIT_WORK((struct work_struct *)&controller->unregister_input, xpad360_common_unregister_input_work);
-
-	/* Allocate in and out buffers*/
-	controller->in.buffer =
-		usb_alloc_coherent(
-			usbdev,
-			ep_in->wMaxPacketSize,
-			GFP_KERNEL,
-			&(controller->in.dma)
-		);
-		
+	error = xpad360_common_init_request(
+		&controller->out_led,
+		interface,
+		XPAD360_EP_OUT,
+		NULL
+	);
 	
-	if (unlikely(!controller->in.buffer)) {
-		error = -ENOMEM;
+	if (unlikely(error)){
+		dev_dbg(device, "controller->out_led failed to init!");
 		goto fail0;
 	}
-		
-	controller->out.buffer =
-		usb_alloc_coherent(
-			usbdev,
-			ep_out->wMaxPacketSize,
-			GFP_KERNEL,
-			&(controller->out.dma)
-		);
-
-	if (unlikely(!controller->out.buffer)) {
-		error = -ENOMEM;
+	
+	error = xpad360_common_init_request(
+		&controller->out_rumble,
+		interface,
+		XPAD360_EP_OUT,
+		NULL
+	);
+	
+	if (unlikely(error)){
+		dev_dbg(device, "controller->out_rumble failed to init!");
 		goto fail1;
 	}
-
-	/* Allocate in and out URBs */
-	controller->in.urb = usb_alloc_urb(0, GFP_KERNEL);
-
-	if (unlikely(!controller->in.urb)) {
-		error = -ENOMEM;
-		goto fail2;
-	}
 	
-	controller->out.urb = usb_alloc_urb(0, GFP_KERNEL);
-	
-	if (unlikely(!controller->out.urb)) {
-		error = -ENOMEM;
-		goto fail3;
-	}
-
 	controller->num_controller = (interface->cur_altsetting->desc.bInterfaceNumber + 1) / 2;
 	
 	{
@@ -308,142 +319,89 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 		strlcat(controller->path, tmp, sizeof(controller->path));
 	}
 
-	usb_set_intfdata(interface, controller);
-
-	/* Initialize URBs*/
-	usb_fill_int_urb(
-		controller->in.urb, usbdev,
-		usb_rcvintpipe(usbdev, ep_in->bEndpointAddress),
-		controller->in.buffer, ep_in->wMaxPacketSize, 
-		xpad360wr_receive, controller, ep_in->bInterval
-	);
+	/* Branch code slightly based on wired and wireless. Based on bInterfaceProtocol. */
+	switch (protocol) {
+	case 129:
+		error = xpad360wr_init(controller); break;
+	case 1:
+		error = xpad360_init(controller); break;
+	default:
+		break;
+	}
 	
-	usb_fill_int_urb(
-		controller->out.urb, usbdev,
-		usb_sndintpipe(usbdev, ep_out->bEndpointAddress),
-		controller->out.buffer, ep_out->wMaxPacketSize,
-		xpad360_common_complete, controller, ep_out->bInterval
-	);
-
-	controller->in.urb->transfer_dma = controller->in.dma;
-	controller->in.urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
-	
-	controller->out.urb->transfer_dma = controller->out.dma;
-	controller->out.urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
-
-	/* Branch code slightly based on wired and wireles. Based on bInterfaceProtocol. */
-	if (protocol == 129)
-		xpad360wr_query_presence(controller);
-	else if (protocol == 1) {
-		/* Wired controller only connects once. */
-		controller->inputdev = input_allocate_device();
-		if (unlikely(controller->inputdev == NULL)) {
-			dev_dbg(device, "input_allocate_device failed!\n");
-			goto fail4;
-		}
-		
-		error = input_ff_create_memless(controller->inputdev, NULL, xpad360_rumble);
-		if (error) {
-			dev_dbg(device, "input_ff_create_memless() failed!\n");
-			input_ff_destroy(controller->inputdev);
-			error = 0; /* We can live without FF support. */
-		}
-		
-		xpad360_common_init_input_dev(controller->inputdev, controller);
-		input_set_abs_params(controller->inputdev, ABS_HAT0X, -1, 1, 0, 0);
-		input_set_abs_params(controller->inputdev, ABS_HAT0Y, -1, 1, 0, 0);
-		__set_bit(ABS_HAT0X, controller->inputdev->absbit); 
-		__set_bit(ABS_HAT0Y, controller->inputdev->absbit);
-		
-		usb_to_input_id(usbdev, &controller->inputdev->id);
-		input_set_drvdata(controller->inputdev, controller);
-		
-		error = input_register_device(controller->inputdev);
-		if (unlikely(error)) {
-			dev_dbg(device, "input_register_device() failed!\n");
-			input_free_device(controller->inputdev);
-			goto fail4;
-		}
-		
-		controller->present = true;
-		controller->in.urb->complete = xpad360_receive;
-		xpad360_set_led(controller, XPAD360_LED_ON_1);
+	if (error) {
+		goto fail2;
 	}
 	
 	error = usb_submit_urb(controller->in.urb, GFP_KERNEL);
 	if (unlikely(error)) {
 		dev_dbg(device, "usb_submit_urb(controller->in.urb) failed!\n");
-		goto fail4;
+		goto fail3;
 	}
 
-	return 0;
+	goto success;
 
-
-fail4:
-	usb_free_urb(controller->out.urb);
 fail3:
-	usb_free_urb(controller->in.urb);
+	switch (protocol) {
+	case 129:
+		xpad360wr_destroy(controller); break;
+	case 1:
+		xpad360_destroy(controller); break;
+	default:
+		break;
+	}
 fail2:
-	usb_free_coherent(
-		usbdev,
-		ep_out->wMaxPacketSize,
-		controller->out.buffer,
-		controller->out.dma
+	xpad360_common_destroy_request(
+		&controller->out_rumble,
+		interface,
+		XPAD360_EP_OUT
 	);
-fail1:
-	usb_free_coherent(
-		usbdev,
-		ep_in->wMaxPacketSize,
-		controller->in.buffer,
-		controller->in.dma
+fail1: 
+	xpad360_common_destroy_request(
+		&controller->out_led,
+		interface,
+		XPAD360_EP_OUT
 	);
 fail0:
 	kfree(controller);
+success:
 	return error;
 }
 
 void xpad360_common_disconnect(struct usb_interface* interface)
 {
 	struct xpad360_controller *controller = usb_get_intfdata(interface);
-	struct usb_device *usbdev = interface_to_usbdev(interface);
 	struct device *device = &(controller->usbintf->dev);
 	int protocol = interface->cur_altsetting->desc.bInterfaceProtocol;
 	
 	dev_dbg(device, "Controller disconnected.\n");
-
-	flush_scheduled_work();
-
-	if (controller->present) {
-		input_unregister_device(controller->inputdev);
-		
-		if (usbdev->state != USB_STATE_NOTATTACHED ) {
-			if (protocol == 129)
-				xpad360wr_set_led_sync(controller, XPAD360_LED_ROTATING);
-			else if (protocol == 1) {
-				xpad360_set_led_sync(controller, XPAD360_LED_ROTATING);
-			}
-		}
+	
+	switch (protocol) {
+	case 129:
+		xpad360wr_destroy(controller); break;
+	case 1:
+		xpad360_destroy(controller); break;
+	default:
+		break;
 	}
 	
-	usb_kill_urb(controller->in.urb);
-	usb_kill_urb(controller->out.urb);
+	xpad360_common_destroy_request(
+		&controller->in,
+		interface,
+		XPAD360_EP_IN
+	);
 	
-	usb_free_coherent(
-		usbdev,
-		interface->cur_altsetting->endpoint[0].desc.wMaxPacketSize,
-		controller->in.buffer,
-		controller->in.dma
+	xpad360_common_destroy_request(
+		&controller->out_led,
+		interface,
+		XPAD360_EP_OUT
 	);
-
-	usb_free_coherent(
-		usbdev,
-		interface->cur_altsetting->endpoint[1].desc.wMaxPacketSize,
-		controller->out.buffer,
-		controller->out.dma
+	
+	xpad360_common_destroy_request(
+		&controller->out_rumble,
+		interface,
+		XPAD360_EP_OUT
 	);
-
-	usb_free_urb(controller->in.urb);
-	usb_free_urb(controller->out.urb);
 	
 	kfree(controller);
 }

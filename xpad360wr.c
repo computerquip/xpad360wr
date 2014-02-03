@@ -1,8 +1,16 @@
 #include "xpad360-common.h"
 
+struct input_work {
+	struct work_struct work;
+	struct xpad360_controller *controller;
+};
+
+static struct input_work register_input;
+static struct input_work unregister_input;
+
 void xpad360wr_query_presence(struct xpad360_controller *controller)
 {
-	u8 *data = controller->out.buffer;
+	u8 *data = controller->out_presence.buffer;
 	
 	data[0] = 0x08;
 	data[1] = 0x00;
@@ -16,9 +24,9 @@ void xpad360wr_query_presence(struct xpad360_controller *controller)
 	data[9] = 0x00;
 	data[10] = 0x00;
 	data[11] = 0x00;
-	controller->out.urb->transfer_buffer_length = 12;
+	controller->out_presence.urb->transfer_buffer_length = 12;
 	
-	if (unlikely(usb_submit_urb(controller->out.urb, GFP_ATOMIC) != 0)) {
+	if (unlikely(usb_submit_urb(controller->out_presence.urb, GFP_ATOMIC) != 0)) {
 		dev_dbg(&(controller->usbintf->dev), "usb_submit_urb() failed in query_presence()!");
 	}
 }
@@ -64,12 +72,12 @@ void xpad360wr_set_led_sync(struct xpad360_controller *controller, u8 status)
 
 void xpad360wr_set_led(struct xpad360_controller *controller, u8 status)
 {
-	u8 *data = controller->out.buffer;
+	u8 *data = controller->out_led.buffer;
 	
 	_xpad360wr_generate_led_packet(data, status, 0x08);
-	controller->out.urb->transfer_buffer_length = 10;
+	controller->out_led.urb->transfer_buffer_length = 10;
 
-	if (unlikely(usb_submit_urb(controller->out.urb, GFP_ATOMIC) != 0)) {
+	if (unlikely(usb_submit_urb(controller->out_led.urb, GFP_ATOMIC) != 0)) {
 		dev_dbg(&(controller->usbintf->dev), "usb_submit_urb() failed in set_led()!");
 	}
 }
@@ -79,7 +87,7 @@ int xpad360wr_rumble(struct input_dev *dev, void *stuff, struct ff_effect *effec
 	struct xpad360_controller *controller = input_get_drvdata(dev);
 
 	if (effect->type == FF_RUMBLE) {
-		u8 *data = controller->out.buffer;
+		u8 *data = controller->out_rumble.buffer;
 		u16 strong = effect->u.rumble.strong_magnitude;
 		u16 weak = effect->u.rumble.weak_magnitude;
 
@@ -95,15 +103,61 @@ int xpad360wr_rumble(struct input_dev *dev, void *stuff, struct ff_effect *effec
 		data[9] = 0x00;
 		data[10] = 0x00;
 		data[11] = 0x00;
-		controller->out.urb->transfer_buffer_length = 12;
+		controller->out_rumble.urb->transfer_buffer_length = 12;
 	} else return 1;
 
-	if (unlikely(usb_submit_urb(controller->out.urb, GFP_ATOMIC) != 0)) {
+	if (unlikely(usb_submit_urb(controller->out_rumble.urb, GFP_ATOMIC) != 0)) {
 		dev_dbg(&(controller->usbintf->dev), "usb_submit_urb() failed in play_effect()!");
 		return -1;
 	}
 
 	return 0;
+}
+
+static void xpad360wr_register_input_work(struct work_struct* work)
+{
+	struct input_work *inputwork = (struct input_work*)work;
+	struct xpad360_controller *controller = inputwork->controller;
+	struct device *device = &inputwork->controller->usbintf->dev;
+	int error = 0;
+
+	dev_dbg(device, "Registering input device...");
+	
+	/* We assume that inputdev has already been unregistered. */
+	controller->inputdev = input_allocate_device();
+
+	if (unlikely(controller->inputdev == NULL)) {
+		dev_dbg(device, "input_allocate_device failed!\n");
+		return;
+	}
+	
+	xpad360_common_init_input_dev(controller->inputdev, controller);
+	__set_bit(BTN_TRIGGER_HAPPY1, controller->inputdev->keybit);
+	__set_bit(BTN_TRIGGER_HAPPY2, controller->inputdev->keybit);
+	__set_bit(BTN_TRIGGER_HAPPY3, controller->inputdev->keybit);
+	__set_bit(BTN_TRIGGER_HAPPY4, controller->inputdev->keybit);
+
+	error = input_ff_create_memless(controller->inputdev, NULL, xpad360wr_rumble);
+	if (error) {
+		dev_dbg(device, "input_ff_create_memless() failed!\n");
+		error = 0; /* We can live without FF support. */
+	}
+	
+	error = input_register_device(controller->inputdev);
+
+	if (unlikely(error)) {
+		dev_dbg(device, "input_register_device() failed!\n");
+		return;
+	}
+}
+
+static void xpad360wr_unregister_input_work(struct work_struct* work)
+{
+	struct input_work *inputwork = (struct input_work*)work;
+	struct device *device = &inputwork->controller->usbintf->dev;
+
+	dev_dbg(device, "Unregistering input device...");
+	input_unregister_device(inputwork->controller->inputdev);
 }
 
 void xpad360wr_receive(struct urb *urb)
@@ -121,7 +175,7 @@ void xpad360wr_receive(struct urb *urb)
 			/* Controller disconnected */
 			if (controller->present) {
 				controller->present = false;
-				schedule_work((struct work_struct *)&controller->unregister_input);
+				schedule_work((struct work_struct *)&unregister_input);
 				dev_dbg(device, "Controller has been disconnected!\n");
 			}
 			break;
@@ -131,7 +185,7 @@ void xpad360wr_receive(struct urb *urb)
 			if (!controller->present) {
 				xpad360wr_set_led(controller, controller->num_controller + 6);
 				controller->present = true;
-				schedule_work((struct work_struct *)&controller->register_input); /* Register input device */
+				schedule_work((struct work_struct *)&register_input); /* Register input device */
 				dev_dbg(device, "Controller has been connected!\n");
 			}
 			break;
@@ -189,11 +243,85 @@ void xpad360wr_receive(struct urb *urb)
 			dev_dbg(device, "Unknown packet receieved. Header was %#.8x\n", header);
 		}
 	} else {
-		/* No known case of this happening. */
-		dev_dbg(device, "Unknown packet received. Length was %i... what about the header...?", urb->actual_length);
+		int i = 0;
+		
+		dev_dbg(device, "Unknown packet received: ");
+		
+		for (; i < urb->actual_length; ++i) 
+			dev_dbg(device, "%#x ", (unsigned int)data[i]);
+		
+		dev_dbg(device, "\n");
 	}
 
 	if (unlikely(usb_submit_urb(urb, GFP_ATOMIC) != 0)) {
 		dev_dbg(device, "usb_submit_urb() failed in receive()!");
+	}
+}
+
+int xpad360wr_init(struct xpad360_controller *controller)
+{	
+	struct device *device = &(controller->usbintf->dev);
+	int error = 0;
+	
+	register_input.controller = controller;
+	unregister_input.controller = controller;
+	
+	INIT_WORK((struct work_struct *)&register_input, xpad360wr_register_input_work);
+	INIT_WORK((struct work_struct *)&unregister_input, xpad360wr_unregister_input_work);
+	
+	/* Allocate presence urb, special to the wireless adapter. */
+	error = xpad360_common_init_request(
+		&controller->in,
+		controller->usbintf,
+		XPAD360_EP_IN,
+		xpad360wr_receive
+	);
+	
+	if (error) {
+		dev_dbg(device, "controller->in failed to init!");
+		return error;
+	}
+	
+	error = xpad360_common_init_request(
+		&controller->out_presence,
+		controller->usbintf,
+		XPAD360_EP_OUT,
+		NULL
+	);
+	
+	if (error) {
+		dev_dbg(device, "controller->out_presence failed to init!");
+		goto fail;
+	}
+	
+	xpad360wr_query_presence(controller);
+	
+	goto success;
+	
+fail:
+	xpad360_common_destroy_request(
+		&controller->in,
+		controller->usbintf,
+		XPAD360_EP_IN
+	);
+success:
+	return error;
+}
+
+void xpad360wr_destroy(struct xpad360_controller *controller)
+{
+	struct usb_device *usbdev = interface_to_usbdev(controller->usbintf);
+	
+	xpad360_common_destroy_request(
+		&controller->out_presence,
+		controller->usbintf,
+		XPAD360_EP_OUT
+	);
+	
+	if (controller->present) {
+		input_unregister_device(controller->inputdev);
+		
+		if (usbdev->state != USB_STATE_NOTATTACHED)
+			xpad360wr_set_led_sync(controller, XPAD360_LED_ROTATING);
 	}
 }
