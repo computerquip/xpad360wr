@@ -276,8 +276,6 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 	int protocol = interface->cur_altsetting->desc.bInterfaceProtocol;
 	int error = 0;
 	
-	dev_dbg(device, "Device: %s\nSerial: %s\n", usbdev->product, usbdev->serial);
-	
 	if (unlikely(!controller)) {
 		return -ENOMEM;
 	}
