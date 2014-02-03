@@ -1,13 +1,5 @@
 #include "xpad360-common.h"
 
-struct input_work {
-	struct work_struct work;
-	struct xpad360_controller *controller;
-};
-
-static struct input_work register_input;
-static struct input_work unregister_input;
-
 void xpad360wr_query_presence(struct xpad360_controller *controller)
 {
 	u8 *data = controller->out_presence.buffer;
@@ -176,7 +168,7 @@ void xpad360wr_receive(struct urb *urb)
 			/* Controller disconnected */
 			if (controller->present) {
 				controller->present = false;
-				schedule_work((struct work_struct *)&unregister_input);
+				schedule_work((struct work_struct *)&controller->unregister_input);
 				dev_dbg(device, "Controller has been disconnected!\n");
 			}
 			break;
@@ -187,7 +179,7 @@ void xpad360wr_receive(struct urb *urb)
 			if (!controller->present) {
 				xpad360wr_set_led(controller, controller->num_controller + 6);
 				controller->present = true;
-				schedule_work((struct work_struct *)&register_input); /* Register input device */
+				schedule_work((struct work_struct *)&controller->register_input);
 				dev_dbg(device, "Controller has been connected!\n");
 			}
 			break;
@@ -267,11 +259,12 @@ int xpad360wr_init(struct xpad360_controller *controller)
 	
 	dev_dbg(device, "Initializing xpad360wr controller...");
 	
-	register_input.controller = controller;
-	unregister_input.controller = controller;
+	/* This looks a bit odd... */
+	controller->register_input.controller = controller;
+	controller->unregister_input.controller = controller;
 	
-	INIT_WORK((struct work_struct *)&register_input, xpad360wr_register_input_work);
-	INIT_WORK((struct work_struct *)&unregister_input, xpad360wr_unregister_input_work);
+	INIT_WORK((struct work_struct *)&controller->register_input, xpad360wr_register_input_work);
+	INIT_WORK((struct work_struct *)&controller->unregister_input, xpad360wr_unregister_input_work);
 	
 	controller->num_controller = (controller->usbintf->cur_altsetting->desc.bInterfaceNumber + 1) / 2;
 	
@@ -318,6 +311,7 @@ fail:
 		XPAD360_EP_IN
 	);
 success:
+	dev_dbg(device, "Finished initializing successfully TEH XPADWR");
 	return error;
 }
 
@@ -330,6 +324,9 @@ void xpad360wr_destroy(struct xpad360_controller *controller)
 		controller->usbintf,
 		XPAD360_EP_OUT
 	);
+	
+	flush_work((struct work_struct*)&controller->register_input);
+	/* No need to wait for unregister_input, as ->present is already set to false */
 	
 	if (controller->present) {
 		input_unregister_device(controller->inputdev);

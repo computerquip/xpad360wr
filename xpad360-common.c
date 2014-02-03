@@ -286,6 +286,7 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 	usb_set_intfdata(interface, controller);
 	controller->usbintf = interface;
 	
+	/* Initialize common urbs */
 	error = xpad360_common_init_request(
 		&controller->out_led,
 		interface,
@@ -311,6 +312,7 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 	}
 
 	/* Branch code slightly based on wired and wireless. Based on bInterfaceProtocol. */
+	/* This essentially initializes controller specific urbs and paths.  */
 	switch (protocol) {
 	case 129:
 		error = xpad360wr_init(controller); break;

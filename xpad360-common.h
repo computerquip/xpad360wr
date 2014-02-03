@@ -55,8 +55,15 @@ struct xpad360_request {
 struct xpad360_controller;
 
 /* This is mostly for wireless devices to dynamically register input */
+struct input_work {
+	struct work_struct work;
+	struct xpad360_controller *controller;
+};
 
 struct xpad360_controller {
+	struct input_work register_input;
+	struct input_work unregister_input;
+	
 	bool present;
 	uint8_t num_controller;
 
