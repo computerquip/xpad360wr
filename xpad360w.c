@@ -74,7 +74,7 @@ void xpad360_receive(struct urb* urb) {
 	struct xpad360_controller *controller = urb->context;
 	unsigned char* data = controller->in.buffer;
 	struct device *device = &(controller->usbintf->dev);
-	struct input_dev *inputdev = controller->inputdev;
+	struct input_dev *inputdev = controller->input.dev;
 	u16 header;
 
 	CHECK_URB_STATUS(urb)
@@ -92,9 +92,10 @@ void xpad360_receive(struct urb* urb) {
 		dev_dbg(device, "Attachment attached! We don't support any of them. );");
 		break;
 	case 0x1400:
+		/* Since nothing else can possibly inputdev, no need to lock. */
 		input_report_abs(inputdev, ABS_HAT0X, !!(data[2] & 0x08) - !!(data[2] & 0x04));
 		input_report_abs(inputdev, ABS_HAT0Y, !!(data[2] & 0x02) - !!(data[2] & 0x01));
-		xpad360_common_parse_input(controller, &data[2]);
+		xpad360_common_parse_input(controller->input.dev, &data[2]);
 		break;
 	default: 
 		dev_dbg(device, "Unknown packet received: "
@@ -121,26 +122,26 @@ int xpad360_init(struct xpad360_controller *controller)
 	strlcat(controller->path, "/input0", sizeof(controller->path));
 	
 	/* Wired controller only connects once. */
-	controller->inputdev = input_allocate_device();
-	if (unlikely(controller->inputdev == NULL)) {
+	controller->input.dev = input_allocate_device();
+	if (unlikely(controller->input.dev == NULL)) {
 		dev_dbg(device, "input_allocate_device failed!\n");
 		return -ENOMEM;
 	}
 	
-	error = input_ff_create_memless(controller->inputdev, NULL, xpad360_rumble);
+	error = input_ff_create_memless(controller->input.dev, NULL, xpad360_rumble);
 	if (error) {
 		dev_dbg(device, "input_ff_create_memless() failed!\n");
-		input_ff_destroy(controller->inputdev);
+		input_ff_destroy(controller->input.dev);
 		error = 0; /* We can live without FF support. */
 	}
 	
-	xpad360_common_init_input_dev(controller->inputdev, controller);
-	input_set_abs_params(controller->inputdev, ABS_HAT0X, -1, 1, 0, 0);
-	input_set_abs_params(controller->inputdev, ABS_HAT0Y, -1, 1, 0, 0);
-	__set_bit(ABS_HAT0X, controller->inputdev->absbit); 
-	__set_bit(ABS_HAT0Y, controller->inputdev->absbit);
+	xpad360_common_init_input_dev(controller->input.dev, controller);
+	input_set_abs_params(controller->input.dev, ABS_HAT0X, -1, 1, 0, 0);
+	input_set_abs_params(controller->input.dev, ABS_HAT0Y, -1, 1, 0, 0);
+	__set_bit(ABS_HAT0X, controller->input.dev->absbit); 
+	__set_bit(ABS_HAT0Y, controller->input.dev->absbit);
 
-	error = input_register_device(controller->inputdev);
+	error = input_register_device(controller->input.dev);
 	if (unlikely(error)) {
 		dev_dbg(device, "input_register_device() failed!\n");
 		goto fail;
@@ -157,14 +158,13 @@ int xpad360_init(struct xpad360_controller *controller)
 		dev_dbg(device, "controller->in failed to init!");
 		goto fail;
 	}
-		
-	controller->present = true;
+	
 	xpad360_set_led(controller, XPAD360_LED_ON_1);
 	
 	goto success;
 	
 fail:
-	input_free_device(controller->inputdev);
+	input_free_device(controller->input.dev);
 success:
 	return error;
 }
@@ -172,7 +172,7 @@ success:
 void xpad360_destroy(struct xpad360_controller *controller) 
 {
 	struct usb_device *usbdev = interface_to_usbdev(controller->usbintf);
-	input_unregister_device(controller->inputdev);
+	input_unregister_device(controller->input.dev);
 		
 	if (usbdev->state != USB_STATE_NOTATTACHED )
 		xpad360_set_led_sync(controller, XPAD360_LED_ROTATING);

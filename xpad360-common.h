@@ -1,5 +1,6 @@
 #pragma once
 
+#include <linux/spinlock.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
@@ -52,22 +53,36 @@ struct xpad360_request {
 	struct urb *urb;
 };
 
+/* A lock is required only for wireless devices. 
+   This is because connection and input events happen on the same interface. 
+   It will often overlap with input registration/unregistration and sending input events
+   thus attempt to send a invalidated input device is common. You can even see
+   input events that are sent before connection packets are sent. It's pretty
+   bad design and doesn't allow me to forget to synchronize and check for validity */
+struct xpad360_input {
+	struct input_dev *dev;
+	struct mutex mutex;
+};
+
 struct xpad360_controller;
 
-/* This is mostly for wireless devices to dynamically register input devices */
 struct input_work {
 	struct work_struct work;
 	struct xpad360_controller *controller;
 };
 
 struct xpad360_controller {
+	/* Because of these hold their own controller struct, we have to have one per controller... */
 	struct input_work register_input;
 	struct input_work unregister_input;
 	
-	bool present;
+	bool okay; /* You're not looking so well... are you okay? */
 	uint8_t num_controller;
+	
+	struct xpad360_request out_presence;
 
-	struct input_dev *inputdev;
+	/* All of the below is common between all controllers */
+	struct xpad360_input input;
 	struct usb_interface *usbintf;
 
 	struct xpad360_request in;
@@ -75,7 +90,6 @@ struct xpad360_controller {
 	/* Instead of setting up syncronization, we just allocate fresh resources per controller. */
 	struct xpad360_request out_led;
 	struct xpad360_request out_rumble;
-	struct xpad360_request out_presence;
 
 	char path[64]; /* Physical stable path we can reference to */
 };
@@ -94,5 +108,5 @@ void xpad360_common_destroy_request(
 );
 
 void xpad360_common_complete(struct urb *urb);
-void xpad360_common_parse_input(struct xpad360_controller *controller, void *_data);
+void xpad360_common_parse_input(struct input_dev *inputdev, void *_data);
 void xpad360_common_init_input_dev(struct input_dev *inputdev, struct xpad360_controller *controller);

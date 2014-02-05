@@ -47,16 +47,9 @@ static int xpad360_controller_open(struct input_dev* dev)
 {
 	struct xpad360_controller *controller = input_get_drvdata(dev);
 	struct device *device = &(controller->usbintf->dev);
-
+	
 	/* We're already inquiring packets so no need to do that again. */
-	dev_dbg(device, "Opening controller...");
-
-	if (controller->present == false) {
-		dev_dbg(device, "failed.\n");
-		return -ENODEV; /* Is this appropriate? */
-	}
-
-	dev_dbg(device, "success.\n");
+	dev_dbg(device, "Opening controller.");
 
 	return 0;
 }
@@ -65,9 +58,10 @@ static void xpad360_controller_close(struct input_dev* dev)
 {
 	struct xpad360_controller *controller = input_get_drvdata(dev);
 	struct device *device = &(controller->usbintf->dev);
-
+	
 	dev_dbg(device, "Closing controller.");
 	/* We cannot stop inquiring packets as connection packets are sent from the same interface. */
+	/* In the case of the wired controller, it sends events when an attachment is attached. */
 }
 
 static void xpad360_common_input_capabilities(struct input_dev *inputdev) 
@@ -131,8 +125,8 @@ void xpad360_common_init_input_dev(struct input_dev *inputdev, struct xpad360_co
 	inputdev->open = xpad360_controller_open;
 	inputdev->close = xpad360_controller_close;
 	
-	usb_to_input_id(usbdev, &controller->inputdev->id);
-	input_set_drvdata(controller->inputdev, controller);
+	usb_to_input_id(usbdev, &controller->input.dev->id);
+	input_set_drvdata(controller->input.dev, controller);
 }
 
 void xpad360_common_complete(struct urb *urb)
@@ -147,8 +141,7 @@ void xpad360_common_complete(struct urb *urb)
  * This function is similar for all 360 controllers, only with different offsets. 
  * Anything uncommon is dealt with in specific modules. Calls input_sync.
  */
-void xpad360_common_parse_input(struct xpad360_controller *controller, void *_data){
-	struct input_dev *inputdev = controller->inputdev;
+void xpad360_common_parse_input(struct input_dev *inputdev, void *_data){
 	u8 *data = _data;
 
 	/* start/back buttons */
