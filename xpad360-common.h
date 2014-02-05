@@ -68,13 +68,16 @@ struct xpad360_controller;
 
 struct input_work {
 	struct work_struct work;
-	struct xpad360_controller *controller;
+	struct xpad360_request *request;
+	struct xpad360_input *input;
+	struct usb_interface *usbintf;
 };
 
 struct xpad360_controller {
 	/* Because of these hold their own controller struct, we have to have one per controller... */
 	struct input_work register_input;
 	struct input_work unregister_input;
+	struct input_work process_input; /* Only work struct that takes advantage of the request member. */
 	
 	bool okay; /* You're not looking so well... are you okay? */
 	uint8_t num_controller;
@@ -85,7 +88,12 @@ struct xpad360_controller {
 	struct xpad360_input input;
 	struct usb_interface *usbintf;
 
-	struct xpad360_request in;
+	/* On wireless devices, 'in' is reset on
+	 * every single input event. This allows to move input
+	 * parsing outside of interrupt context and allows the use
+	 * of mutex at the cost of more memory allocation... not sure
+	 * which one is worse yet. */
+	struct xpad360_request *in;
 	
 	/* Instead of setting up syncronization, we just allocate fresh resources per controller. */
 	struct xpad360_request out_led;
@@ -98,7 +106,8 @@ int xpad360_common_init_request(
 	struct xpad360_request *request, 
 	struct usb_interface *intf, 
 	int direction, 
-	void(*callback)(struct urb*) /* May be NULL for generic handling if direction is XPAD360_EP_OUT */
+	void(*callback)(struct urb*), /* May be NULL for generic handling if direction is XPAD360_EP_OUT */
+	gfp_t mem_flags
 );
 
 void xpad360_common_destroy_request(
@@ -109,4 +118,4 @@ void xpad360_common_destroy_request(
 
 void xpad360_common_complete(struct urb *urb);
 void xpad360_common_parse_input(struct input_dev *inputdev, void *_data);
-void xpad360_common_init_input_dev(struct input_dev *inputdev, struct xpad360_controller *controller);
+void xpad360_common_init_input_dev(struct input_dev *inputdev, struct usb_interface *intf);

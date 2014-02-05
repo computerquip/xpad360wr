@@ -72,7 +72,7 @@ void xpad360_set_led(struct xpad360_controller *controller, u8 status)
 
 void xpad360_receive(struct urb* urb) {
 	struct xpad360_controller *controller = urb->context;
-	unsigned char* data = controller->in.buffer;
+	unsigned char* data = controller->in->buffer;
 	struct device *device = &(controller->usbintf->dev);
 	struct input_dev *inputdev = controller->input.dev;
 	u16 header;
@@ -135,7 +135,7 @@ int xpad360_init(struct xpad360_controller *controller)
 		error = 0; /* We can live without FF support. */
 	}
 	
-	xpad360_common_init_input_dev(controller->input.dev, controller);
+	xpad360_common_init_input_dev(controller->input.dev, controller->usbintf);
 	input_set_abs_params(controller->input.dev, ABS_HAT0X, -1, 1, 0, 0);
 	input_set_abs_params(controller->input.dev, ABS_HAT0Y, -1, 1, 0, 0);
 	__set_bit(ABS_HAT0X, controller->input.dev->absbit); 
@@ -147,11 +147,14 @@ int xpad360_init(struct xpad360_controller *controller)
 		goto fail;
 	}
 	
+	controller->in = kzalloc(sizeof(struct xpad360_request), GFP_KERNEL);
+	
 	error = xpad360_common_init_request(
-		&controller->in,
+		controller->in,
 		controller->usbintf,
 		XPAD360_EP_IN,
-		xpad360_receive
+		xpad360_receive,
+		GFP_KERNEL
 	);
 	
 	if (error) {

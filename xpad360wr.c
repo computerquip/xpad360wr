@@ -1,5 +1,7 @@
 #include "xpad360-common.h"
 
+/* TODO: Synchronize rumble with input mutex, or rather, figure out if it needs it. */
+
 void xpad360wr_query_presence(struct xpad360_controller *controller)
 {
 	u8 *data = controller->out_presence.buffer;
@@ -109,13 +111,13 @@ int xpad360wr_rumble(struct input_dev *dev, void *stuff, struct ff_effect *effec
 static void xpad360wr_register_input_work(struct work_struct* work)
 {
 	struct input_work *inputwork = (struct input_work*)work;
-	struct xpad360_controller *controller = inputwork->controller;
-	struct device *device = &inputwork->controller->usbintf->dev;
+	struct xpad360_input *input = inputwork->input;
+	struct device *device = &inputwork->usbintf->dev;
 	int error = 0;
-
-	mutex_lock(&controller->input.mutex);
 	
-	if (controller->input.dev) {
+	mutex_lock(&input->mutex);
+	
+	if (input->dev) {
 		/* We should already have a valid input device. */
 		dev_dbg(device, "Device attempt to register a non-NULL device!");
 		goto finish;
@@ -124,31 +126,30 @@ static void xpad360wr_register_input_work(struct work_struct* work)
 	dev_info(device, "Registering input device...");
 	
 	/* We assume that inputdev has already been unregistered. */
-	controller->input.dev = input_allocate_device();
+	input->dev = input_allocate_device();
 
 	/* Even though the input device isn't initialized, it can handle 
 	   key input functions. */
-	mutex_unlock(&controller->input.mutex);
-	controller->okay = true;
+	mutex_unlock(&input->mutex);
 	
-	if (unlikely(controller->input.dev == NULL)) {
+	if (unlikely(input->dev == NULL)) {
 		dev_err(device, "input_allocate_device failed!\n");
 		goto finish;
 	}
 	
-	xpad360_common_init_input_dev(controller->input.dev, controller);
-	__set_bit(BTN_TRIGGER_HAPPY1, controller->input.dev->keybit);
-	__set_bit(BTN_TRIGGER_HAPPY2, controller->input.dev->keybit);
-	__set_bit(BTN_TRIGGER_HAPPY3, controller->input.dev->keybit);
-	__set_bit(BTN_TRIGGER_HAPPY4, controller->input.dev->keybit);
+	xpad360_common_init_input_dev(input->dev, inputwork->usbintf);
+	__set_bit(BTN_TRIGGER_HAPPY1, input->dev->keybit);
+	__set_bit(BTN_TRIGGER_HAPPY2, input->dev->keybit);
+	__set_bit(BTN_TRIGGER_HAPPY3, input->dev->keybit);
+	__set_bit(BTN_TRIGGER_HAPPY4, input->dev->keybit);
 
-	error = input_ff_create_memless(controller->input.dev, NULL, xpad360wr_rumble);
+	error = input_ff_create_memless(input->dev, NULL, xpad360wr_rumble);
 	if (error) {
 		dev_err(device, "input_ff_create_memless() failed!\n");
 		error = 0; /* We can live without FF support. */
 	}
 	
-	error = input_register_device(controller->input.dev);
+	error = input_register_device(input->dev);
 
 	if (unlikely(error)) {
 		dev_err(device, "input_register_device() failed!\n");
@@ -157,35 +158,67 @@ static void xpad360wr_register_input_work(struct work_struct* work)
 	
 	/* The controller should now be visible from user-space as an input device. */
 finish: /* This doesn't mean success */
-	mutex_unlock(&controller->input.mutex);
+	mutex_unlock(&input->mutex);
 }
 
 static void xpad360wr_unregister_input_work(struct work_struct* work)
 {
 	struct input_work *inputwork = (struct input_work*)work;
-	struct xpad360_controller *controller = inputwork->controller;
-	struct device *device = &controller->usbintf->dev;
+	struct xpad360_input *input = inputwork->input;
+	struct device *device = &inputwork->usbintf->dev;
 
-	mutex_lock(&controller->input.mutex);
+	mutex_lock(&input->mutex);
 	
-	if (!controller->input.dev) {
+	if (!input->dev) {
 		dev_dbg(device, "Device attempted to unregister a NULL device.");
-		goto fail;
+		goto success;
 	}
 	
 	dev_info(device, "Unregistering input device...");
-	input_unregister_device(controller->input.dev);
-	controller->input.dev = NULL;
-	controller->okay = false;
+	input_unregister_device(input->dev);
+	input->dev = NULL;
 	
-fail:
-	mutex_unlock(&controller->input.mutex);
+success:
+	mutex_unlock(&input->mutex);
+}
+
+static void xpad360wr_process_input_work(struct work_struct* work) 
+{
+	struct input_work *inputwork = (struct input_work*)work;
+	struct xpad360_input *input = inputwork->input;
+	struct device *device = &inputwork->usbintf->dev;
+	u8 *data = inputwork->request->buffer;
+	
+	mutex_lock(&input->mutex);
+
+	if (!input->dev) {
+	/* Input device either died or hasn't been allocated yet. */
+		dev_dbg(device, "Input event recieved without input device initialized!\n");
+		goto success;
+	}
+		
+	input_report_key(input->dev, BTN_TRIGGER_HAPPY3, data[6] & 0x01); /* D-pad up	 */
+	input_report_key(input->dev, BTN_TRIGGER_HAPPY4, data[6] & 0x02); /* D-pad down */
+	input_report_key(input->dev, BTN_TRIGGER_HAPPY1, data[6] & 0x04); /* D-pad left */
+	input_report_key(input->dev, BTN_TRIGGER_HAPPY2, data[6] & 0x08); /* D-pad right */
+	xpad360_common_parse_input(input->dev, &data[6]);
+	
+	xpad360_common_destroy_request(
+		inputwork->request, 
+		inputwork->usbintf,
+		XPAD360_EP_IN
+	);
+
+	kfree(inputwork->request);
+	
+success:
+	mutex_unlock(&input->mutex);
 }
 
 void xpad360wr_receive(struct urb *urb)
 {
 	struct xpad360_controller *controller = urb->context;
-	unsigned char* data = controller->in.buffer;
+	u8* data = controller->in->buffer;
 	struct device *device = &(controller->usbintf->dev);
 
 	if (!controller) {
@@ -195,33 +228,22 @@ void xpad360wr_receive(struct urb *urb)
 	
 	CHECK_URB_STATUS(urb)
 
-	{
-		int i = 0;
-		
-		printk(KERN_DEBUG "Unknown packet received: ");
-		
-		for (; i < urb->actual_length; ++i) 
-			printk(KERN_CONT "%#x ", (unsigned int)data[i]);
-	}
-	
 	/* Event from Wireless Receiver */
 	if (data[0] == 0x08 && urb->actual_length == 2) {
 		switch (data[1]) {
 		case 0x00:
-			controller->okay = false;
 			schedule_work((struct work_struct *)&controller->unregister_input);
 			dev_info(device, "Controller has been disconnected!\n");
 			break;
 
 		case 0x80:
-			/* Controller connected */
 			xpad360wr_set_led(controller, controller->num_controller + 6);
+			/* The scheduled work sets controller->okay to true later */
 			schedule_work((struct work_struct *)&controller->register_input);
 			dev_info(device, "Controller has been connected!\n");
 			break;
 
 		case 0x40:
-			/* Headset connected */
 			dev_info(device, "Controller has connected a headset!\n");
 			break;
 
@@ -243,12 +265,15 @@ void xpad360wr_receive(struct urb *urb)
 		switch (header) {
 		case 0x0000:
 			break;
-		case 0x0001:
-			
-			if (!controller->okay)
+		case 0x0001: {
+#if 0 /* Disables all input processing. */
+			int error = 0;
+#if 0
+			if (!controller->okay) {
 			/*  Should never happen randomly, only around connect/disconnect */
 				dev_dbg(device, "Controller is *NOT* okay!\n");
 				break;
+			}
 	
 			if (!controller->input.dev) {
 			/* Input device either died or hasn't been allocated yet. */
@@ -256,14 +281,36 @@ void xpad360wr_receive(struct urb *urb)
 				break;
 			}
 				
-			dev_dbg(device, "Beginning report...\n");
 			input_report_key(controller->input.dev, BTN_TRIGGER_HAPPY3, data[6] & 0x01); /* D-pad up	 */
 			input_report_key(controller->input.dev, BTN_TRIGGER_HAPPY4, data[6] & 0x02); /* D-pad down */
 			input_report_key(controller->input.dev, BTN_TRIGGER_HAPPY1, data[6] & 0x04); /* D-pad left */
 			input_report_key(controller->input.dev, BTN_TRIGGER_HAPPY2, data[6] & 0x08); /* D-pad right */
 			xpad360_common_parse_input(controller->input.dev, &data[6]);
+#else
+			controller->process_input.request = controller->in;
+			schedule_work((struct work_struct *)&controller->process_input);
 			
+			/* Generate a new 'in' request struct for next packet. Its the job of process_input to cleanup */
+			controller->in = kzalloc(sizeof(struct xpad360_request), GFP_ATOMIC);
+			
+			error = 
+			xpad360_common_init_request(
+				controller->in, 
+				controller->usbintf, 
+				XPAD360_EP_IN, 
+				xpad360wr_receive,
+				GFP_ATOMIC
+			);
+			
+			if (error) {
+				dev_dbg(device, "Generating new 'in' request failed. Should probably die.");
+				break;
+			}
+				
+#endif
+#endif
 			break;
+		}
 		case 0x000A: {
 			int size = (strchr((char*)&data[5], 0xFF) - (char*)&data[5]);
 			dev_dbg(device, "Controller has attachment! Description: %.*s\n", size, (char*)&data[5]);
@@ -296,7 +343,7 @@ void xpad360wr_receive(struct urb *urb)
 			printk(KERN_CONT "%#x ", (unsigned int)data[i]);
 	}
 
-	if (unlikely(usb_submit_urb(urb, GFP_ATOMIC) != 0)) {
+	if (unlikely(usb_submit_urb(controller->in->urb, GFP_ATOMIC) != 0)) {
 		dev_err(device, "usb_submit_urb() failed in receive()!");
 	}
 }
@@ -308,11 +355,18 @@ int xpad360wr_init(struct xpad360_controller *controller)
 
 	mutex_init(&controller->input.mutex);
 	
-	controller->register_input.controller = controller;
-	controller->unregister_input.controller = controller;
+	/* *_input.request is generated during xpad360wr_receive */
+	controller->register_input.usbintf = controller->usbintf;
+	controller->unregister_input.usbintf = controller->usbintf;
+	controller->process_input.usbintf = controller->usbintf;
+	
+	controller->unregister_input.input = &controller->input;
+	controller->register_input.input = &controller->input;
+	controller->process_input.input = &controller->input;
 	
 	INIT_WORK((struct work_struct *)&controller->register_input, xpad360wr_register_input_work);
 	INIT_WORK((struct work_struct *)&controller->unregister_input, xpad360wr_unregister_input_work);
+	INIT_WORK((struct work_struct *)&controller->process_input, xpad360wr_process_input_work);
 	
 	controller->num_controller = (controller->usbintf->cur_altsetting->desc.bInterfaceNumber + 1) / 2;
 	
@@ -323,12 +377,14 @@ int xpad360wr_init(struct xpad360_controller *controller)
 		strlcat(controller->path, tmp, sizeof(controller->path));
 	}
 	
-	/* Allocate presence urb, special to the wireless adapter. */
+	controller->in = kzalloc(sizeof(struct xpad360_request), GFP_KERNEL);
+	
 	error = xpad360_common_init_request(
-		&controller->in,
+		controller->in,
 		controller->usbintf,
 		XPAD360_EP_IN,
-		xpad360wr_receive
+		xpad360wr_receive,
+		GFP_KERNEL
 	);
 	
 	if (error) {
@@ -340,7 +396,7 @@ int xpad360wr_init(struct xpad360_controller *controller)
 		&controller->out_presence,
 		controller->usbintf,
 		XPAD360_EP_OUT,
-		NULL
+		NULL, GFP_KERNEL
 	);
 	
 	if (error) {
@@ -354,7 +410,7 @@ int xpad360wr_init(struct xpad360_controller *controller)
 	
 fail:
 	xpad360_common_destroy_request(
-		&controller->in,
+		controller->in,
 		controller->usbintf,
 		XPAD360_EP_IN
 	);
@@ -365,7 +421,6 @@ success:
 void xpad360wr_destroy(struct xpad360_controller *controller)
 {
 	struct usb_device *usbdev = interface_to_usbdev(controller->usbintf);
-	struct device *device = &(controller->usbintf->dev);
 	
 	xpad360_common_destroy_request(
 		&controller->out_presence,

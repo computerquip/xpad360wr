@@ -112,10 +112,11 @@ static void xpad360_common_input_capabilities(struct input_dev *inputdev)
 #undef SET_BIT
 }
 
-void xpad360_common_init_input_dev(struct input_dev *inputdev, struct xpad360_controller *controller)
+void xpad360_common_init_input_dev(struct input_dev *inputdev, struct usb_interface *intf)
 {
-	struct device *device = &controller->usbintf->dev;
-	struct usb_device *usbdev = interface_to_usbdev(controller->usbintf);
+	struct xpad360_controller *controller = usb_get_intfdata(intf);
+	struct device *device = &intf->dev;
+	struct usb_device *usbdev = interface_to_usbdev(intf);
 
 	xpad360_common_input_capabilities(inputdev);
 	
@@ -125,8 +126,8 @@ void xpad360_common_init_input_dev(struct input_dev *inputdev, struct xpad360_co
 	inputdev->open = xpad360_controller_open;
 	inputdev->close = xpad360_controller_close;
 	
-	usb_to_input_id(usbdev, &controller->input.dev->id);
-	input_set_drvdata(controller->input.dev, controller);
+	usb_to_input_id(usbdev, &inputdev->id);
+	input_set_drvdata(inputdev, controller); /* Why not? */
 }
 
 void xpad360_common_complete(struct urb *urb)
@@ -175,11 +176,13 @@ void xpad360_common_parse_input(struct input_dev *inputdev, void *_data){
 	input_sync(inputdev);
 }
 
+/* Can be used on the same struct as long as the previous was cleaned or a reference is kept.  */
 int xpad360_common_init_request(
 	struct xpad360_request *request, 
 	struct usb_interface *intf, 
 	int direction, 
-	void(*callback)(struct urb*))
+	void(*callback)(struct urb*),
+	gfp_t mem_flags)
 {
 	struct usb_device * usbdev = interface_to_usbdev(intf);
 	struct usb_endpoint_descriptor *ep = &(intf->cur_altsetting->endpoint[direction].desc);
@@ -191,7 +194,7 @@ int xpad360_common_init_request(
 		usb_alloc_coherent(
 			usbdev,
 			ep->wMaxPacketSize,
-			GFP_KERNEL,
+			mem_flags,
 			&(request->dma)
 		);
 		
@@ -201,7 +204,7 @@ int xpad360_common_init_request(
 	}
 	
 	/* Allocate URB */
-	request->urb = usb_alloc_urb(0, GFP_KERNEL);
+	request->urb = usb_alloc_urb(0, mem_flags);
 	
 	if (unlikely(!request->urb)) {
 		error = -ENOMEM;
@@ -250,6 +253,7 @@ void xpad360_common_destroy_request(
 	struct usb_device *usbdev = interface_to_usbdev(intf);
 	
 	usb_kill_urb(request->urb);
+	usb_free_urb(request->urb);
 	
 	usb_free_coherent(
 		usbdev,
@@ -257,13 +261,11 @@ void xpad360_common_destroy_request(
 		request->buffer,
 		request->dma
 	);
-	
-	usb_free_urb(request->urb);
 }
 
 static int xpad360_common_probe(struct usb_interface *interface, const struct usb_device_id *id)
 {
-	struct usb_device * usbdev = interface_to_usbdev(interface);
+	//struct usb_device * usbdev = interface_to_usbdev(interface);
 	struct xpad360_controller *controller = kzalloc(sizeof(struct xpad360_controller), GFP_KERNEL);
 	struct device *device = &(interface->dev);
 	int protocol = interface->cur_altsetting->desc.bInterfaceProtocol;
@@ -282,7 +284,7 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 		&controller->out_led,
 		interface,
 		XPAD360_EP_OUT,
-		NULL
+		NULL, GFP_KERNEL
 	);
 	
 	if (unlikely(error)){
@@ -294,7 +296,7 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 		&controller->out_rumble,
 		interface,
 		XPAD360_EP_OUT,
-		NULL
+		NULL, GFP_KERNEL
 	);
 	
 	if (unlikely(error)){
@@ -304,6 +306,15 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 
 	/* Branch code slightly based on wired and wireless. Based on bInterfaceProtocol. */
 	/* This essentially initializes controller specific urbs and paths.  */
+	
+	/*
+	 * The follow initialization functions *must* initialize controller->in. 
+	 * It is also their job to clean up in the destroy functions. 
+	 *
+	 * Since controllers may differ, it's also their job to completely initialize 
+	 * the input devices themselves. In the case of the wireless adapter, it's not
+	 * even done in the init function.  
+	 */
 	switch (protocol) {
 	case 129:
 		error = xpad360wr_init(controller); break;
@@ -317,7 +328,7 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 		goto fail2;
 	}
 	
-	error = usb_submit_urb(controller->in.urb, GFP_KERNEL);
+	error = usb_submit_urb(controller->in->urb, GFP_KERNEL);
 	if (unlikely(error)) {
 		dev_err(device, "usb_submit_urb(controller->in.urb) failed!\n");
 		goto fail3;
@@ -370,7 +381,7 @@ void xpad360_common_disconnect(struct usb_interface* interface)
 	}
 	
 	xpad360_common_destroy_request(
-		&controller->in,
+		controller->in,
 		interface,
 		XPAD360_EP_IN
 	);
@@ -387,6 +398,7 @@ void xpad360_common_disconnect(struct usb_interface* interface)
 		XPAD360_EP_OUT
 	);
 	
+	kfree(controller->in);
 	kfree(controller);
 }
 
