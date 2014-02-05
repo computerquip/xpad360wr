@@ -195,6 +195,15 @@ void xpad360wr_receive(struct urb *urb)
 	
 	CHECK_URB_STATUS(urb)
 
+	{
+		int i = 0;
+		
+		printk(KERN_DEBUG "Unknown packet received: ");
+		
+		for (; i < urb->actual_length; ++i) 
+			printk(KERN_CONT "%#x ", (unsigned int)data[i]);
+	}
+	
 	/* Event from Wireless Receiver */
 	if (data[0] == 0x08 && urb->actual_length == 2) {
 		switch (data[1]) {
@@ -235,17 +244,19 @@ void xpad360wr_receive(struct urb *urb)
 		case 0x0000:
 			break;
 		case 0x0001:
+			
 			if (!controller->okay)
 			/*  Should never happen randomly, only around connect/disconnect */
-				dev_dbg(device, "Controller is *NOT* okay!");
+				dev_dbg(device, "Controller is *NOT* okay!\n");
 				break;
 	
 			if (!controller->input.dev) {
 			/* Input device either died or hasn't been allocated yet. */
-				dev_dbg(device, "Input event recieved without input device initialized!");
+				dev_dbg(device, "Input event recieved without input device initialized!\n");
 				break;
 			}
-					
+				
+			dev_dbg(device, "Beginning report...\n");
 			input_report_key(controller->input.dev, BTN_TRIGGER_HAPPY3, data[6] & 0x01); /* D-pad up	 */
 			input_report_key(controller->input.dev, BTN_TRIGGER_HAPPY4, data[6] & 0x02); /* D-pad down */
 			input_report_key(controller->input.dev, BTN_TRIGGER_HAPPY1, data[6] & 0x04); /* D-pad left */
