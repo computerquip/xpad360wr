@@ -53,12 +53,9 @@ struct xpad360_request {
 	struct urb *urb;
 };
 
-/* A lock is required only for wireless devices. 
-   This is because connection and input events happen on the same interface. 
-   It will often overlap with input registration/unregistration and sending input events
-   thus attempt to send a invalidated input device is common. You can even see
-   input events that are sent before connection packets are sent. It's pretty
-   bad design and doesn't allow me to forget to synchronize and check for validity */
+/* After a bit more research, it turns out the mutex isn't needed
+   Since I've taken the time to implement it though, I'm going to keep them there for now. 
+   Think of it like... my training wheels. */
 struct xpad360_input {
 	struct input_dev *dev;
 	struct mutex mutex;

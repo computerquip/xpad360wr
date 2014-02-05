@@ -370,7 +370,7 @@ void xpad360_common_disconnect(struct usb_interface* interface)
 	int protocol = interface->cur_altsetting->desc.bInterfaceProtocol;
 	
 	dev_info(device, "Controller disconnected.\n");
-	
+		
 	switch (protocol) {
 	case 129:
 		xpad360wr_destroy(controller); break;

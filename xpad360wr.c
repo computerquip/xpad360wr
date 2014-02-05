@@ -196,7 +196,7 @@ static void xpad360wr_process_input_work(struct work_struct* work)
 		dev_dbg(device, "Input event recieved without input device initialized!\n");
 		goto success;
 	}
-		
+	
 	input_report_key(input->dev, BTN_TRIGGER_HAPPY3, data[6] & 0x01); /* D-pad up	 */
 	input_report_key(input->dev, BTN_TRIGGER_HAPPY4, data[6] & 0x02); /* D-pad down */
 	input_report_key(input->dev, BTN_TRIGGER_HAPPY1, data[6] & 0x04); /* D-pad left */
@@ -266,7 +266,7 @@ void xpad360wr_receive(struct urb *urb)
 		case 0x0000:
 			break;
 		case 0x0001: {
-#if 0 /* Disables all input processing. */
+#if 1 /* Disables all input processing. */
 			int error = 0;
 #if 0
 			if (!controller->okay) {
@@ -432,6 +432,7 @@ void xpad360wr_destroy(struct xpad360_controller *controller)
 	
 	if (controller->input.dev) {
 		input_unregister_device(controller->input.dev);
+		controller->input.dev = NULL;
 		
 		if (usbdev->state != USB_STATE_NOTATTACHED)
 			xpad360wr_set_led_sync(controller, XPAD360_LED_ROTATING);
