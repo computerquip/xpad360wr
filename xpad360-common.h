@@ -6,7 +6,6 @@
 #include <linux/slab.h>
 #include <linux/usb/input.h>
 
-/* Careful, is meant to be called in a void function.  */
 #define CHECK_URB_STATUS(urb) \
 	switch (urb->status) { \
 	case 0: \
@@ -53,8 +52,7 @@ struct xpad360_request {
 	struct urb *urb;
 };
 
-/* The mutex is needed during input registration. There's a race if an input event is shot out
-   right before a disconnection packet. Not so much for a connection packet though.. */
+/* There's a race if an input event is shot out right before a disconnection packet */
 struct xpad360_input {
 	struct input_dev *dev;
 	struct mutex mutex;
@@ -70,12 +68,10 @@ struct input_work {
 };
 
 struct xpad360_controller {
-	/* Because of these hold their own controller struct, we have to have one per controller... */
 	struct input_work register_input;
 	struct input_work unregister_input;
-	struct input_work process_input; /* Only work struct that takes advantage of the request member. */
+	struct input_work process_input;
 	
-	bool okay; /* You're not looking so well... are you okay? */
 	uint8_t num_controller;
 	
 	struct xpad360_request out_presence;
@@ -84,18 +80,13 @@ struct xpad360_controller {
 	struct xpad360_input input;
 	struct usb_interface *usbintf;
 
-	/* On wireless devices, 'in' is reset on
-	 * every single input event. This allows to move input
-	 * parsing outside of interrupt context and allows the use
-	 * of mutex at the cost of more memory allocation... not sure
-	 * which one is worse yet. */
 	struct xpad360_request *in;
 	
 	/* Instead of setting up syncronization, we just allocate fresh resources per controller. */
 	struct xpad360_request out_led;
 	struct xpad360_request out_rumble;
 
-	char path[64]; /* Physical stable path we can reference to */
+	char path[64];
 };
 
 int xpad360_common_init_request(

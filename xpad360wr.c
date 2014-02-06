@@ -267,8 +267,7 @@ void xpad360wr_receive(struct urb *urb)
 			break;
 		case 0x0001: {
 			int error = 0;
-			/* Input events occur *a lot*. Is it okay to use kzalloc like this? 
-			 * The only real alter*/
+			/* Input events occur *a lot*. Is it okay to use kzalloc like this? */
 			controller->process_input.request = controller->in;
 			schedule_work((struct work_struct *)&controller->process_input);
 			
