@@ -124,7 +124,7 @@ static void xpad360wr_register_input_work(struct work_struct* work)
 	if (input->dev) {
 		/* This should actually never happen */
 		dev_dbg(device, "Device attempt to register a non-NULL device!");
-		return
+		return;
 	}
 	
 	dev_info(device, "Registering input device...");
@@ -265,7 +265,8 @@ void xpad360wr_receive(struct urb *urb)
 		switch (header) {
 		case 0x0000:
 			break;
-		case 0x0001: 
+		case 0x0001: {
+			int error = 0;
 			/* Input events occur *a lot*. Is it okay to use kzalloc like this? 
 			 * The only real alter*/
 			controller->process_input.request = controller->in;
@@ -406,7 +407,7 @@ void xpad360wr_destroy(struct xpad360_controller *controller)
 		XPAD360_EP_OUT
 	);
 	
-	usb_poison_urb(controller->in);
+	usb_poison_urb(controller->in->urb);
 	
 	if (controller->input.dev) {
 		input_unregister_device(controller->input.dev);
