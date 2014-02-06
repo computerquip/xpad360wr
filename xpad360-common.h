@@ -53,9 +53,8 @@ struct xpad360_request {
 	struct urb *urb;
 };
 
-/* After a bit more research, it turns out the mutex isn't needed
-   Since I've taken the time to implement it though, I'm going to keep them there for now. 
-   Think of it like... my training wheels. */
+/* The mutex is needed during input registration. There's a race if an input event is shot out
+   right before a disconnection packet. Not so much for a connection packet though.. */
 struct xpad360_input {
 	struct input_dev *dev;
 	struct mutex mutex;

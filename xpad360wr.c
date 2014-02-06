@@ -115,26 +115,25 @@ static void xpad360wr_register_input_work(struct work_struct* work)
 	struct device *device = &inputwork->usbintf->dev;
 	int error = 0;
 	
-	mutex_lock(&input->mutex);
+	/* If an input event is going off before this happens,
+	   the input event will fail because it's null. It won't
+	   be able to do anything until input_allocate_device() is called.
+	   During that time, it's okay to use the input device for anything
+	   although some calls my be a noop. */
 	
 	if (input->dev) {
-		/* We should already have a valid input device. */
+		/* This should actually never happen */
 		dev_dbg(device, "Device attempt to register a non-NULL device!");
-		goto finish;
+		return
 	}
 	
 	dev_info(device, "Registering input device...");
 	
-	/* We assume that inputdev has already been unregistered. */
 	input->dev = input_allocate_device();
-
-	/* Even though the input device isn't initialized, it can handle 
-	   key input functions. */
-	mutex_unlock(&input->mutex);
 	
 	if (unlikely(input->dev == NULL)) {
 		dev_err(device, "input_allocate_device failed!\n");
-		goto finish;
+		return;
 	}
 	
 	xpad360_common_init_input_dev(input->dev, inputwork->usbintf);
@@ -153,12 +152,8 @@ static void xpad360wr_register_input_work(struct work_struct* work)
 
 	if (unlikely(error)) {
 		dev_err(device, "input_register_device() failed!\n");
-		goto finish;
+		return;
 	}
-	
-	/* The controller should now be visible from user-space as an input device. */
-finish: /* This doesn't mean success */
-	mutex_unlock(&input->mutex);
 }
 
 static void xpad360wr_unregister_input_work(struct work_struct* work)
@@ -167,6 +162,7 @@ static void xpad360wr_unregister_input_work(struct work_struct* work)
 	struct xpad360_input *input = inputwork->input;
 	struct device *device = &inputwork->usbintf->dev;
 
+	/* The only time this will not lock is during an input event. */
 	mutex_lock(&input->mutex);
 	
 	if (!input->dev) {
@@ -189,10 +185,10 @@ static void xpad360wr_process_input_work(struct work_struct* work)
 	struct device *device = &inputwork->usbintf->dev;
 	u8 *data = inputwork->request->buffer;
 	
+	/* The only time this will not lock is during disconnection. */
 	mutex_lock(&input->mutex);
 
 	if (!input->dev) {
-	/* Input device either died or hasn't been allocated yet. */
 		dev_dbg(device, "Input event recieved without input device initialized!\n");
 		goto success;
 	}
@@ -227,7 +223,12 @@ void xpad360wr_receive(struct urb *urb)
 	}
 	
 	CHECK_URB_STATUS(urb)
-
+	
+	/* Input synchronization is kinda a big deal here... because we offput
+	   syncronization to a handler, I'm concerned that even though event A
+	   showed up before event B, event B might be slightly processed faster than
+	   event A in certain cases. I'd like some assurance otherwise... */
+	
 	/* Event from Wireless Receiver */
 	if (data[0] == 0x08 && urb->actual_length == 2) {
 		switch (data[1]) {
@@ -238,7 +239,6 @@ void xpad360wr_receive(struct urb *urb)
 
 		case 0x80:
 			xpad360wr_set_led(controller, controller->num_controller + 6);
-			/* The scheduled work sets controller->okay to true later */
 			schedule_work((struct work_struct *)&controller->register_input);
 			dev_info(device, "Controller has been connected!\n");
 			break;
@@ -265,32 +265,12 @@ void xpad360wr_receive(struct urb *urb)
 		switch (header) {
 		case 0x0000:
 			break;
-		case 0x0001: {
-#if 1 /* Disables all input processing. */
-			int error = 0;
-#if 0
-			if (!controller->okay) {
-			/*  Should never happen randomly, only around connect/disconnect */
-				dev_dbg(device, "Controller is *NOT* okay!\n");
-				break;
-			}
-	
-			if (!controller->input.dev) {
-			/* Input device either died or hasn't been allocated yet. */
-				dev_dbg(device, "Input event recieved without input device initialized!\n");
-				break;
-			}
-				
-			input_report_key(controller->input.dev, BTN_TRIGGER_HAPPY3, data[6] & 0x01); /* D-pad up	 */
-			input_report_key(controller->input.dev, BTN_TRIGGER_HAPPY4, data[6] & 0x02); /* D-pad down */
-			input_report_key(controller->input.dev, BTN_TRIGGER_HAPPY1, data[6] & 0x04); /* D-pad left */
-			input_report_key(controller->input.dev, BTN_TRIGGER_HAPPY2, data[6] & 0x08); /* D-pad right */
-			xpad360_common_parse_input(controller->input.dev, &data[6]);
-#else
+		case 0x0001: 
+			/* Input events occur *a lot*. Is it okay to use kzalloc like this? 
+			 * The only real alter*/
 			controller->process_input.request = controller->in;
 			schedule_work((struct work_struct *)&controller->process_input);
 			
-			/* Generate a new 'in' request struct for next packet. Its the job of process_input to cleanup */
 			controller->in = kzalloc(sizeof(struct xpad360_request), GFP_ATOMIC);
 			
 			error = 
@@ -303,12 +283,10 @@ void xpad360wr_receive(struct urb *urb)
 			);
 			
 			if (error) {
-				dev_dbg(device, "Generating new 'in' request failed. Should probably die.");
+				dev_dbg(device, "Generating new 'in' request failed. Should probably die. FIXME");
 				break;
 			}
-				
-#endif
-#endif
+			
 			break;
 		}
 		case 0x000A: {
@@ -428,7 +406,7 @@ void xpad360wr_destroy(struct xpad360_controller *controller)
 		XPAD360_EP_OUT
 	);
 	
-	mutex_lock(&controller->input.mutex);
+	usb_poison_urb(controller->in);
 	
 	if (controller->input.dev) {
 		input_unregister_device(controller->input.dev);
@@ -437,6 +415,4 @@ void xpad360wr_destroy(struct xpad360_controller *controller)
 		if (usbdev->state != USB_STATE_NOTATTACHED)
 			xpad360wr_set_led_sync(controller, XPAD360_LED_ROTATING);
 	}
-	
-	mutex_unlock(&controller->input.mutex);
 }
