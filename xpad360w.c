@@ -176,6 +176,8 @@ void xpad360_destroy(struct xpad360_controller *controller)
 {
 	struct usb_device *usbdev = interface_to_usbdev(controller->usbintf);
 	input_unregister_device(controller->input.dev);
+	
+	usb_poison_urb(controller->in->urb);
 		
 	if (usbdev->state != USB_STATE_NOTATTACHED )
 		xpad360_set_led_sync(controller, XPAD360_LED_ROTATING);

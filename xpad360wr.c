@@ -160,7 +160,6 @@ void xpad360wr_process_packet_work(struct work_struct* work)
 	struct xpad360_controller *controller = usb_get_intfdata(packet->usbintf);
 	struct xpad360_input *input = packet->input;
 	struct device *device = &packet->usbintf->dev;
-	struct usb_endpoint_descriptor *ep = &packet->usbintf->cur_altsetting->endpoint[XPAD360_EP_IN].desc;
 	u8 *data = packet->request->buffer;
 
 	if (data[0] == 0x08 && packet->request->urb->actual_length == 2) {
@@ -290,7 +289,6 @@ input_proc_finish:
 void xpad360wr_receive(struct urb *urb)
 {
 	struct xpad360_controller *controller = urb->context;
-	struct usb_endpoint_descriptor *ep = &(controller->usbintf->cur_altsetting->endpoint[XPAD360_EP_IN].desc);
 	struct device *device = &(controller->usbintf->dev);
 	int error = 0;
 	
@@ -393,6 +391,7 @@ void xpad360wr_destroy(struct xpad360_controller *controller)
 	);
 	
 	usb_poison_urb(controller->in->urb);
+	flush_work((struct work_struct*)&controller->packet_work);
 	
 	if (controller->input.dev) {
 		input_unregister_device(controller->input.dev);
