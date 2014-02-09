@@ -163,6 +163,9 @@ void xpad360wr_process_packet_work(struct work_struct* work)
 	struct usb_endpoint_descriptor *ep = &packet->usbintf->cur_altsetting->endpoint[XPAD360_EP_IN].desc;
 	u8 *data = packet->request->buffer;
 
+	dev_dbg("First four bytes of the packet: #.2x #.2x #.2x #.2x\n", 
+		data[0], data[1], data[2], data[3]);
+
 	if (data[0] == 0x08 && packet->request->urb->actual_length == 2) {
 		switch (data[1]) {
 		case 0x00:
