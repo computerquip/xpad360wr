@@ -382,8 +382,8 @@ void xpad360_common_disconnect(struct usb_interface* interface)
 	
 	/* We don't do this to controller->in as it needs to be done above 
 	   This is also why the destroy_request function can't do it. :/ */
-	usb_poison_urb(controller->out_led);
-	usb_poison_urb(controller->out_rumble);
+	usb_poison_urb(controller->out_led.urb);
+	usb_poison_urb(controller->out_rumble.urb);
 	
 	xpad360_common_destroy_request(
 		controller->in,

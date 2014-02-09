@@ -384,7 +384,7 @@ void xpad360wr_destroy(struct xpad360_controller *controller)
 	struct usb_device *usbdev = interface_to_usbdev(controller->usbintf);
 	
 	usb_poison_urb(controller->in->urb);
-	usb_poison_urb(controller->out_presence);
+	usb_poison_urb(controller->out_presence.urb);
 	
 	xpad360_common_destroy_request(
 		&controller->out_presence,
