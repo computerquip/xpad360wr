@@ -84,6 +84,7 @@ struct xpad360_controller {
 	struct xpad360_request out_led;
 	struct xpad360_request out_rumble;
 
+	const char* name;
 	char path[64];
 };
 

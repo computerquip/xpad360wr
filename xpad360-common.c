@@ -37,6 +37,13 @@ void xpad360_destroy(struct xpad360_controller *controller);
 int xpad360wr_init(struct xpad360_controller *controller);
 void xpad360wr_destroy(struct xpad360_controller *controller);
 
+/* This is syncronized with the usb_device_id table.
+   We use the usb_device_id table to search for the name. */
+const char* xpad360_device_names[] = {
+	"Xbox 360 Wireless Adapter",
+	"xbox 360 Wired Controller"
+};
+
 static struct usb_device_id xpad360_table[] = {
 	{ USB_DEVICE_INTERFACE_PROTOCOL(0x045E, 0x0719, 129) },
 	{ USB_DEVICE_INTERFACE_PROTOCOL(0x045E, 0x028e, 1) },
@@ -119,8 +126,8 @@ void xpad360_common_init_input_dev(struct input_dev *inputdev, struct usb_interf
 	struct usb_device *usbdev = interface_to_usbdev(intf);
 
 	xpad360_common_input_capabilities(inputdev);
-	
-	inputdev->name = usbdev->product;
+
+	inputdev->name = controller->name;
 	inputdev->phys = controller->path;
 	inputdev->dev.parent = device;
 	inputdev->open = xpad360_controller_open;
@@ -275,6 +282,9 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 		return -ENOMEM;
 	}
 	
+	/* Some trickery here... we just exploit the fact that id is our table above with an offset. */
+	controller->name = xpad360_device_names[id - xpad360_table];
+
 	/* Make sure we have access to the controller and interface its on. */
 	usb_set_intfdata(interface, controller);
 	controller->usbintf = interface;
@@ -309,11 +319,12 @@ static int xpad360_common_probe(struct usb_interface *interface, const struct us
 	
 	/*
 	 * The follow initialization functions *must* initialize controller->in. 
-	 * It is also their job to clean up in the destroy functions. 
 	 *
 	 * Since controllers may differ, it's also their job to completely initialize 
 	 * the input devices themselves. In the case of the wireless adapter, it's not
-	 * even done in the init function.  
+	 * even done in the init function. 
+	 * 
+	 * They should *not* clean controller->in but clean up the input device. 
 	 */
 	switch (protocol) {
 	case 129:
