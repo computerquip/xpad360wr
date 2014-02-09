@@ -166,7 +166,7 @@ void xpad360wr_process_packet_work(struct work_struct* work)
 	if (data[0] == 0x08 && packet->request->urb->actual_length == 2) {
 		switch (data[1]) {
 		case 0x00:
-			/* The only time this will not lock is during an input event. */
+			/* The only time this will not lock immediately is during an input event. */
 			mutex_lock(&input->mutex);
 			
 			if (!input->dev) {
@@ -211,9 +211,8 @@ unregister_finish:
 		switch (header) {
 		case 0x0000:
 			break;
+			
 		case 0x0001:
-			/* Input events occur *a lot*. Is it okay to use kzalloc like this? */
-
 			/* The only time this will not lock is during disconnection. */
 			if (!mutex_trylock(&input->mutex)){
 				dev_dbg(device, "Tried to acquire mutex while it was "
