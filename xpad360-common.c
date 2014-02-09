@@ -251,8 +251,7 @@ void xpad360_common_destroy_request(
 	int direction)
 {
 	struct usb_device *usbdev = interface_to_usbdev(intf);
-	
-	usb_kill_urb(request->urb);
+
 	usb_free_urb(request->urb);
 	
 	usb_free_coherent(

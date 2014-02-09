@@ -273,18 +273,23 @@ input_proc_finish:
 		/* FIXME: Smaller way to do the following, perhaps with device info? */
 		int i = 0;
 		
-		printk(KERN_DEBUG "Unknown packet received: ");
+		printk(
+			KERN_DEBUG 
+			"Unknown packet received. "
+			"Header %#.2x "
+			"Packet: ",
+			data[0] 
+      		);
 		
 		for (; i < packet->request->urb->actual_length; ++i) 
 			printk(KERN_CONT "%#x ", (unsigned int)data[i]);
 	}
 #endif
 
-	usb_free_coherent(
-		interface_to_usbdev(packet->usbintf),
-		ep->wMaxPacketSize,
-		packet->request->buffer,
-		packet->request->dma
+	xpad360_common_destroy_request(
+		packet->request, 
+		packet->usbintf,
+		XPAD360_EP_IN
 	);
 }
 
@@ -293,6 +298,7 @@ void xpad360wr_receive(struct urb *urb)
 	struct xpad360_controller *controller = urb->context;
 	struct usb_endpoint_descriptor *ep = &(controller->usbintf->cur_altsetting->endpoint[XPAD360_EP_IN].desc);
 	struct device *device = &(controller->usbintf->dev);
+	int error = 0;
 	
 	CHECK_URB_STATUS(device, urb)
 	
@@ -303,22 +309,21 @@ void xpad360wr_receive(struct urb *urb)
 	controller->packet_work.request = controller->in;
 	schedule_work((struct work_struct*)&controller->packet_work);
 
-	controller->in->buffer =
-		usb_alloc_coherent(
-			interface_to_usbdev(controller->usbintf),
-			ep->wMaxPacketSize,
-			GFP_ATOMIC,
-			&(controller->in->dma)
-		);
-		
-	if (unlikely(!controller->in->buffer)) {
-		dev_err(device, "usb_alloc_coherent() failed in receive()!");
+	error = xpad360_common_init_request(
+		controller->in, 
+		controller->usbintf, 
+		XPAD360_EP_IN, 
+		xpad360wr_receive,
+		GFP_ATOMIC
+	);
+	
+	if (error) {
+		dev_err(device, "Failed to recreate the in urb!");
 		return;
 	}
 
-	if (unlikely(usb_submit_urb(controller->in->urb, GFP_ATOMIC) != 0)) {
+	if (unlikely(usb_submit_urb(controller->in->urb, GFP_ATOMIC) != 0))
 		dev_err(device, "usb_submit_urb() failed in receive()!");
-	}
 }
 
 int xpad360wr_init(struct xpad360_controller *controller)
