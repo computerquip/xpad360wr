@@ -6,7 +6,7 @@
 #include <linux/slab.h>
 #include <linux/usb/input.h>
 
-#define CHECK_URB_STATUS(urb) \
+#define CHECK_URB_STATUS(device, urb) \
 	switch (urb->status) { \
 	case 0: \
 		break; \
@@ -60,7 +60,7 @@ struct xpad360_input {
 
 struct xpad360_controller;
 
-struct input_work {
+struct packet_work {
 	struct work_struct work;
 	struct xpad360_request *request;
 	struct xpad360_input *input;
@@ -68,9 +68,7 @@ struct input_work {
 };
 
 struct xpad360_controller {
-	struct input_work register_input;
-	struct input_work unregister_input;
-	struct input_work process_input;
+	struct packet_work packet_work;
 	
 	uint8_t num_controller;
 	

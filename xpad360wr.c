@@ -108,11 +108,9 @@ int xpad360wr_rumble(struct input_dev *dev, void *stuff, struct ff_effect *effec
 	return 0;
 }
 
-static void xpad360wr_register_input_work(struct work_struct* work)
+static void xpad360wr_register_input(struct xpad360_input *input, struct usb_interface *usbintf)
 {
-	struct input_work *inputwork = (struct input_work*)work;
-	struct xpad360_input *input = inputwork->input;
-	struct device *device = &inputwork->usbintf->dev;
+	struct device *device = &usbintf->dev;
 	int error = 0;
 	
 	/* If an input event is going off before this happens,
@@ -136,7 +134,7 @@ static void xpad360wr_register_input_work(struct work_struct* work)
 		return;
 	}
 	
-	xpad360_common_init_input_dev(input->dev, inputwork->usbintf);
+	xpad360_common_init_input_dev(input->dev, usbintf);
 	__set_bit(BTN_TRIGGER_HAPPY1, input->dev->keybit);
 	__set_bit(BTN_TRIGGER_HAPPY2, input->dev->keybit);
 	__set_bit(BTN_TRIGGER_HAPPY3, input->dev->keybit);
@@ -156,139 +154,96 @@ static void xpad360wr_register_input_work(struct work_struct* work)
 	}
 }
 
-static void xpad360wr_unregister_input_work(struct work_struct* work)
+void xpad360wr_process_packet_work(struct work_struct* work) 
 {
-	struct input_work *inputwork = (struct input_work*)work;
-	struct xpad360_input *input = inputwork->input;
-	struct device *device = &inputwork->usbintf->dev;
+	struct packet_work *packet = (struct packet_work*)work;
+	struct xpad360_controller *controller = usb_get_intfdata(packet->usbintf);
+	struct xpad360_input *input = packet->input;
+	struct device *device = &packet->usbintf->dev;
+	struct usb_endpoint_descriptor *ep = &packet->usbintf->cur_altsetting->endpoint[XPAD360_EP_IN].desc;
+	u8 *data = packet->request->buffer;
 
-	/* The only time this will not lock is during an input event. */
-	mutex_lock(&input->mutex);
-	
-	if (!input->dev) {
-		dev_dbg(device, "Device attempted to unregister a NULL device.");
-		goto success;
-	}
-	
-	dev_info(device, "Unregistering input device...");
-	input_unregister_device(input->dev);
-	input->dev = NULL;
-	
-success:
-	mutex_unlock(&input->mutex);
-}
-
-static void xpad360wr_process_input_work(struct work_struct* work) 
-{
-	struct input_work *inputwork = (struct input_work*)work;
-	struct xpad360_input *input = inputwork->input;
-	struct device *device = &inputwork->usbintf->dev;
-	u8 *data = inputwork->request->buffer;
-	
-	/* The only time this will not lock is during disconnection. */
-	mutex_lock(&input->mutex);
-
-	if (!input->dev) {
-		dev_dbg(device, "Input event recieved without input device initialized!\n");
-		goto success;
-	}
-	
-	input_report_key(input->dev, BTN_TRIGGER_HAPPY3, data[6] & 0x01); /* D-pad up	 */
-	input_report_key(input->dev, BTN_TRIGGER_HAPPY4, data[6] & 0x02); /* D-pad down */
-	input_report_key(input->dev, BTN_TRIGGER_HAPPY1, data[6] & 0x04); /* D-pad left */
-	input_report_key(input->dev, BTN_TRIGGER_HAPPY2, data[6] & 0x08); /* D-pad right */
-	xpad360_common_parse_input(input->dev, &data[6]);
-	
-	xpad360_common_destroy_request(
-		inputwork->request, 
-		inputwork->usbintf,
-		XPAD360_EP_IN
-	);
-
-	kfree(inputwork->request);
-	
-success:
-	mutex_unlock(&input->mutex);
-}
-
-void xpad360wr_receive(struct urb *urb)
-{
-	struct xpad360_controller *controller = urb->context;
-	u8* data = controller->in->buffer;
-	struct device *device = &(controller->usbintf->dev);
-
-	if (!controller) {
-		dev_err(device, "Controller is null!");
-		return;
-	}
-	
-	CHECK_URB_STATUS(urb)
-	
-	/* Input synchronization is kinda a big deal here... because we offput
-	   syncronization to a handler, I'm concerned that even though event A
-	   showed up before event B, event B might be slightly processed faster than
-	   event A in certain cases. I'd like some assurance otherwise... */
-	
-	/* Event from Wireless Receiver */
-	if (data[0] == 0x08 && urb->actual_length == 2) {
+	if (data[0] == 0x08 && packet->request->urb->actual_length == 2) {
 		switch (data[1]) {
 		case 0x00:
-			schedule_work((struct work_struct *)&controller->unregister_input);
-			dev_info(device, "Controller has been disconnected!\n");
+			/* The only time this will not lock is during an input event. */
+			mutex_lock(&input->mutex);
+			
+			if (!input->dev) {
+				dev_dbg(device, "Device attempted to unregister a NULL device.");
+				goto unregister_finish;
+			}
+			
+			dev_info(device, "Unregistering input device...");
+			input_unregister_device(input->dev);
+			input->dev = NULL;
+			
+unregister_finish:
+			mutex_unlock(&input->mutex);
+			dev_dbg(device, "Controller has been disconnected!\n");
 			break;
 
 		case 0x80:
 			xpad360wr_set_led(controller, controller->num_controller + 6);
-			schedule_work((struct work_struct *)&controller->register_input);
-			dev_info(device, "Controller has been connected!\n");
+			xpad360wr_register_input(input, packet->usbintf);
+			dev_dbg(device, "Controller has been connected!\n");
 			break;
 
 		case 0x40:
-			dev_info(device, "Controller has connected a headset!\n");
+			dev_dbg(device, "Controller has connected a headset!\n");
 			break;
 
 		case 0xC0:
-
 			xpad360wr_set_led(controller, controller->num_controller + 6);
-			schedule_work((struct work_struct *)&controller->register_input);
+			xpad360wr_register_input(input, packet->usbintf);
 			/* TODO: Schedule something for headsets. */
-			dev_info(device, "Controller has connected with a headset!\n");
+			dev_dbg(device, "Controller has connected with a headset!\n");
 			break;
+
 		default:
 			dev_dbg(device, "Unknown packet received. Length was 2, header was %#.2x\n", data[1]);
 		}
 	}
 	/* Event from Controller */
-	else if (data[0] == 0x00 && urb->actual_length == 29) {
+	else if (data[0] == 0x00 && packet->request->urb->actual_length == 29) {
 		u16 header = le16_to_cpup((__le16*)&data[1]);
 
 		switch (header) {
 		case 0x0000:
 			break;
-		case 0x0001: {
-			int error = 0;
+		case 0x0001:
 			/* Input events occur *a lot*. Is it okay to use kzalloc like this? */
-			controller->process_input.request = controller->in;
-			schedule_work((struct work_struct *)&controller->process_input);
-			
-			controller->in = kzalloc(sizeof(struct xpad360_request), GFP_ATOMIC);
-			
-			error = 
-			xpad360_common_init_request(
-				controller->in, 
-				controller->usbintf, 
-				XPAD360_EP_IN, 
-				xpad360wr_receive,
-				GFP_ATOMIC
-			);
-			
-			if (error) {
-				dev_dbg(device, "Generating new 'in' request failed. Should probably die. FIXME");
+			/* process_input will free the transfer buffer. */
+			controller->packet_work.request = controller->in;
+				/* The only time this will not lock is during disconnection. */
+			if (!mutex_trylock(&input->mutex)){
+				dev_dbg(device, "Tried to acquire mutex while it was "
+							  	"locked during input parsing!");
 				break;
 			}
+
+			if (!input->dev) {
+				dev_dbg(device, "Input event recieved without input device initialized!\n");
+				goto input_proc_finish;
+			}
 			
+			input_report_key(input->dev, BTN_TRIGGER_HAPPY3, data[6] & 0x01); /* D-pad up	 */
+			input_report_key(input->dev, BTN_TRIGGER_HAPPY4, data[6] & 0x02); /* D-pad down */
+			input_report_key(input->dev, BTN_TRIGGER_HAPPY1, data[6] & 0x04); /* D-pad left */
+			input_report_key(input->dev, BTN_TRIGGER_HAPPY2, data[6] & 0x08); /* D-pad right */
+			xpad360_common_parse_input(input->dev, &data[6]);
+			
+			xpad360_common_destroy_request(
+				packet->request, 
+				packet->usbintf,
+				XPAD360_EP_IN
+			);
+			
+input_proc_finish:
+			mutex_unlock(&input->mutex);
+
 			break;
-		}
+
 		case 0x000A: {
 			int size = (strchr((char*)&data[5], 0xFF) - (char*)&data[5]);
 			dev_dbg(device, "Controller has attachment! Description: %.*s\n", size, (char*)&data[5]);
@@ -312,13 +267,53 @@ void xpad360wr_receive(struct urb *urb)
 		default:
 			dev_dbg(device, "Unknown packet receieved. Header was %#.8x\n", header);
 		}
-	} else {
+	}
+#ifdef DEBUG 
+	else {
+		/* FIXME: Smaller way to do the following, perhaps with device info? */
 		int i = 0;
 		
 		printk(KERN_DEBUG "Unknown packet received: ");
 		
-		for (; i < urb->actual_length; ++i) 
+		for (; i < packet->request->urb->actual_length; ++i) 
 			printk(KERN_CONT "%#x ", (unsigned int)data[i]);
+	}
+#endif
+
+	usb_free_coherent(
+		interface_to_usbdev(packet->usbintf),
+		ep->wMaxPacketSize,
+		packet->request->buffer,
+		packet->request->dma
+	);
+}
+
+void xpad360wr_receive(struct urb *urb)
+{
+	struct xpad360_controller *controller = urb->context;
+	struct usb_endpoint_descriptor *ep = &(controller->usbintf->cur_altsetting->endpoint[XPAD360_EP_IN].desc);
+	struct device *device = &(controller->usbintf->dev);
+	
+	CHECK_URB_STATUS(device, urb)
+	
+	/* Here we pass our URB to somewhere else...
+	   create a new buffer to prevent a data race with the scheduled work...
+	   then submit the URB with the new buffer.*/
+	
+	controller->packet_work.request = controller->in;
+	schedule_work((struct work_struct*)&controller->packet_work);
+
+	controller->in->buffer =
+		usb_alloc_coherent(
+			interface_to_usbdev(controller->usbintf),
+			ep->wMaxPacketSize,
+			GFP_ATOMIC,
+			&(controller->in->dma)
+		);
+		
+	if (unlikely(!controller->in->buffer)) {
+		dev_err(device, "usb_alloc_coherent() failed in receive()!");
+		return;
 	}
 
 	if (unlikely(usb_submit_urb(controller->in->urb, GFP_ATOMIC) != 0)) {
@@ -332,19 +327,10 @@ int xpad360wr_init(struct xpad360_controller *controller)
 	int error = 0;
 
 	mutex_init(&controller->input.mutex);
-	
-	/* *_input.request is generated during xpad360wr_receive */
-	controller->register_input.usbintf = controller->usbintf;
-	controller->unregister_input.usbintf = controller->usbintf;
-	controller->process_input.usbintf = controller->usbintf;
-	
-	controller->unregister_input.input = &controller->input;
-	controller->register_input.input = &controller->input;
-	controller->process_input.input = &controller->input;
-	
-	INIT_WORK((struct work_struct *)&controller->register_input, xpad360wr_register_input_work);
-	INIT_WORK((struct work_struct *)&controller->unregister_input, xpad360wr_unregister_input_work);
-	INIT_WORK((struct work_struct *)&controller->process_input, xpad360wr_process_input_work);
+
+	controller->packet_work.usbintf = controller->usbintf;
+	controller->packet_work.input = &controller->input;
+	INIT_WORK((struct work_struct *)&controller->packet_work, xpad360wr_process_packet_work);
 	
 	controller->num_controller = (controller->usbintf->cur_altsetting->desc.bInterfaceNumber + 1) / 2;
 	

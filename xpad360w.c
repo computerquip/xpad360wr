@@ -77,7 +77,7 @@ void xpad360_receive(struct urb* urb) {
 	struct input_dev *inputdev = controller->input.dev;
 	u16 header;
 
-	CHECK_URB_STATUS(urb)
+	CHECK_URB_STATUS(device, urb)
 	
 	header = le16_to_cpup((__le16*)&data[0]);
 	switch (header) {

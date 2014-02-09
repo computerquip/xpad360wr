@@ -135,7 +135,7 @@ void xpad360_common_complete(struct urb *urb)
 	struct xpad360_controller *controller = urb->context;
 	struct device *device = &(controller->usbintf->dev);
 
-	CHECK_URB_STATUS(urb)
+	CHECK_URB_STATUS(device, urb)
 }
 
 /* 
