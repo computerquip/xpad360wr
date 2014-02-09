@@ -294,12 +294,11 @@ void xpad360wr_receive(struct urb *urb)
 	
 	CHECK_URB_STATUS(device, urb)
 	
-	/* Here we pass our URB to somewhere else...
-	   create a new buffer to prevent a data race with the scheduled work...
-	   then submit the URB with the new buffer.*/
+	/* The scheduled work will clean the urb up. */
 	controller->packet_work.request = controller->in;
 	schedule_work((struct work_struct*)&controller->packet_work);
 
+	/* Don't wait, just create a new one and resubmit. */
 	controller->in = kzalloc(sizeof(struct xpad360_request), GFP_ATOMIC);
 	
 	error = xpad360_common_init_request(
@@ -384,13 +383,15 @@ void xpad360wr_destroy(struct xpad360_controller *controller)
 {
 	struct usb_device *usbdev = interface_to_usbdev(controller->usbintf);
 	
+	usb_poison_urb(controller->in->urb);
+	usb_poison_urb(controller->out_presence);
+	
 	xpad360_common_destroy_request(
 		&controller->out_presence,
 		controller->usbintf,
 		XPAD360_EP_OUT
 	);
 	
-	usb_poison_urb(controller->in->urb);
 	flush_work((struct work_struct*)&controller->packet_work);
 	
 	if (controller->input.dev) {

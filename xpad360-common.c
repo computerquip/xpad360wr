@@ -245,6 +245,7 @@ success:
 	return error;
 }
 
+/* Must not be called in interrupt context! */
 void xpad360_common_destroy_request(
 	struct xpad360_request *request, 
 	struct usb_interface *intf,
@@ -378,6 +379,11 @@ void xpad360_common_disconnect(struct usb_interface* interface)
 	default:
 		break;
 	}
+	
+	/* We don't do this to controller->in as it needs to be done above 
+	   This is also why the destroy_request function can't do it. :/ */
+	usb_poison_urb(controller->out_led);
+	usb_poison_urb(controller->out_rumble);
 	
 	xpad360_common_destroy_request(
 		controller->in,
