@@ -163,9 +163,6 @@ void xpad360wr_process_packet_work(struct work_struct* work)
 	struct usb_endpoint_descriptor *ep = &packet->usbintf->cur_altsetting->endpoint[XPAD360_EP_IN].desc;
 	u8 *data = packet->request->buffer;
 
-	dev_dbg("First four bytes of the packet: #.2x #.2x #.2x #.2x\n", 
-		data[0], data[1], data[2], data[3]);
-
 	if (data[0] == 0x08 && packet->request->urb->actual_length == 2) {
 		switch (data[1]) {
 		case 0x00:
@@ -216,9 +213,8 @@ unregister_finish:
 			break;
 		case 0x0001:
 			/* Input events occur *a lot*. Is it okay to use kzalloc like this? */
-			/* process_input will free the transfer buffer. */
-			controller->packet_work.request = controller->in;
-				/* The only time this will not lock is during disconnection. */
+
+			/* The only time this will not lock is during disconnection. */
 			if (!mutex_trylock(&input->mutex)){
 				dev_dbg(device, "Tried to acquire mutex while it was "
 							  	"locked during input parsing!");
@@ -235,12 +231,6 @@ unregister_finish:
 			input_report_key(input->dev, BTN_TRIGGER_HAPPY1, data[6] & 0x04); /* D-pad left */
 			input_report_key(input->dev, BTN_TRIGGER_HAPPY2, data[6] & 0x08); /* D-pad right */
 			xpad360_common_parse_input(input->dev, &data[6]);
-			
-			xpad360_common_destroy_request(
-				packet->request, 
-				packet->usbintf,
-				XPAD360_EP_IN
-			);
 			
 input_proc_finish:
 			mutex_unlock(&input->mutex);
@@ -294,6 +284,8 @@ input_proc_finish:
 		packet->usbintf,
 		XPAD360_EP_IN
 	);
+	
+	kfree(packet->request);
 }
 
 void xpad360wr_receive(struct urb *urb)
@@ -308,10 +300,11 @@ void xpad360wr_receive(struct urb *urb)
 	/* Here we pass our URB to somewhere else...
 	   create a new buffer to prevent a data race with the scheduled work...
 	   then submit the URB with the new buffer.*/
-	
 	controller->packet_work.request = controller->in;
 	schedule_work((struct work_struct*)&controller->packet_work);
 
+	controller->in = kzalloc(sizeof(struct xpad360_request), GFP_ATOMIC);
+	
 	error = xpad360_common_init_request(
 		controller->in, 
 		controller->usbintf, 
