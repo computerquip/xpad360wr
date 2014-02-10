@@ -41,7 +41,7 @@ void xpad360wr_destroy(struct xpad360_controller *controller);
    We use the usb_device_id table to search for the name. */
 const char* xpad360_device_names[] = {
 	"Xbox 360 Wireless Adapter",
-	"xbox 360 Wired Controller"
+	"Xbox 360 Wired Controller"
 };
 
 static struct usb_device_id xpad360_table[] = {
