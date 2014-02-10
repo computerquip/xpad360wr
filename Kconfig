@@ -1,0 +1,6 @@
+config JOYSTICK_XPAD360
+	tristate "Xbox 360 devices"
+	default m
+	depends on INPUT && INPUT_JOYSTICK
+	help
+		This adds Xbox 360 device support.
