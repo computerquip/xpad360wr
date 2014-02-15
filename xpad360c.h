@@ -91,5 +91,5 @@ struct urb* xpad360c_copy_urb(struct urb *old_urb, gfp_t mem_flags)
 void xpad360c_complete(struct urb *urb); /* Generic handler that checks for status, gives a message on error, then returns. */
 void xpad360c_parse_input(struct input_dev *inputdev, void *_data);
 
-void xpad360c_allocate_inputdev(struct xpad360_controller *controller);
+void xpad360c_allocate_inputdev(struct xpad360_controller *controller, struct usb_device *usbdev);
 void xpad360c_destroy_inputdev(struct xpad360_controller *controller);

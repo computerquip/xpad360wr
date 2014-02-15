@@ -67,11 +67,13 @@ static void xpad360c_input_capabilities(struct input_dev *inputdev)
 }
 
 /* There is only one input_dev per controller, ever.
-   So, we just pass a controller instead of doing it more flexibly.  */
-void xpad360c_allocate_inputdev(struct xpad360_controller *controller)
+   So, we just pass a controller instead of doing it more flexibly.  
+   controller->name and controller->path must be set beforehand. */
+void xpad360c_allocate_inputdev(
+	struct xpad360_controller *controller,
+	struct usb_device *usbdev)
 {
 	struct input_dev * inputdev = input_allocate_device();
-	struct usb_device *usbdev = controller->in->dev;
 
 	if (!inputdev){
 		controller->inputdev = NULL;

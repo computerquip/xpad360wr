@@ -117,23 +117,24 @@ void xpad360w_receive(struct urb* urb) {
 	}
 }
 
-static void xpad360w_register_input(struct xpad360_controller *controller)
+static void xpad360w_register_input(struct xpad360_controller *controller, struct usb_device *usbdev)
 {
 	struct input_dev *inputdev;
 	int error = 0;
 	
-	xpad360c_allocate_inputdev(controller);
+	xpad360c_allocate_inputdev(controller, usbdev);
 	
-	if (!controller->inputdev) return;
-
 	inputdev = controller->inputdev;
 
+	if (!inputdev) return;
+
 	/* Wireless specific stuff */
-	input_set_abs_params(controller->inputdev, ABS_HAT0X, -1, 1, 0, 0);
-	input_set_abs_params(controller->inputdev, ABS_HAT0Y, -1, 1, 0, 0);
-	__set_bit(ABS_HAT0X, controller->inputdev->absbit); 
-	__set_bit(ABS_HAT0Y, controller->inputdev->absbit);
+	input_set_abs_params(inputdev, ABS_HAT0X, -1, 1, 0, 0);
+	input_set_abs_params(inputdev, ABS_HAT0Y, -1, 1, 0, 0);
+	__set_bit(ABS_HAT0X, inputdev->absbit); 
+	__set_bit(ABS_HAT0Y, inputdev->absbit);
 	
+	/* Don't care if this fails... */
 	input_ff_create_memless(inputdev, NULL, xpad360w_rumble);
 
 	error = input_register_device(inputdev);
@@ -157,20 +158,19 @@ int xpad360w_probe(struct usb_interface *interface, const struct usb_device_id *
 	
 	usb_make_path(usbdev, controller->path, sizeof(controller->path));
 	strlcat(controller->path, "/input0", sizeof(controller->path));
-
 	controller->name = xpad360w_device_names[id - xpad360w_table];
-
-	xpad360w_register_input(controller);
-
-	if (!controller->inputdev) {
-		error = -ENOMEM;
-		goto fail0;
-	}
+	
+	xpad360w_register_input(controller, usbdev);
 	
 	error = xpad360c_allocate(controller, interface);
 	if (error) goto fail1;
 
 	controller->in->complete = xpad360w_receive;
+
+	if (!controller->inputdev) {
+		error = -ENOMEM;
+		goto fail0;
+	}
 
 	error = usb_submit_urb(controller->in, GFP_KERNEL);
 	if (unlikely(error)) {

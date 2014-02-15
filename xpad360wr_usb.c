@@ -109,12 +109,12 @@ int xpad360wr_rumble(struct input_dev *dev, void *stuff, struct ff_effect *effec
 	} else return -1;
 }
 
-void xpad360wr_register_input(struct xpad360_controller *controller)
+void xpad360wr_register_input(struct xpad360_controller *controller, struct usb_device *usbdev)
 {
 	struct input_dev *inputdev;
 	int error = 0;
 	
-	xpad360c_allocate_inputdev(controller);
+	xpad360c_allocate_inputdev(controller, usbdev);
 	
 	if (!controller->inputdev) return;
 
@@ -159,7 +159,7 @@ void xpad360wr_process_packet_work(struct work_struct* work)
 			/* Connection + Headset flag */
 		case 0x80: {
 			xpad360wr_led(&controller->xpad, controller->num_controller + 6);
-			xpad360wr_register_input(&controller->xpad);
+			xpad360wr_register_input(&controller->xpad, packet->urb->dev);
 			break;
 		}
 
