@@ -1,6 +1,13 @@
-config JOYSTICK_XPAD360
-	tristate "Xbox 360 devices"
+config JOYSTICK_XPAD360W
+	tristate "Xbox 360 wired devices"
 	default m
 	depends on INPUT && INPUT_JOYSTICK
 	help
-		This adds Xbox 360 device support.
+		This adds Xbox 360 wired device support.
+
+config JOYSTICK_XPAD360WR
+	tristate "Xbox 360 wireless devices"
+	default m
+	depends on INPUT && INPUT_JOYSTICK
+	help
+		This adds Xbox 360 wireless adapter support.
