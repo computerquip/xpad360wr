@@ -10,6 +10,8 @@ struct xpad360wr_controller {
 	struct mutex mutex;
 
 	struct packet_work packet_work;
+
+	const char *name;
 	uint8_t num_controller; /* This can be calculated from interface. This is just for convenience. */
 };
 
@@ -21,16 +23,6 @@ static const struct usb_device_id xpad360wr_table[] = {
 	{ USB_DEVICE_INTERFACE_PROTOCOL(0x045E, 0x0719, 129) },
 	{}
 };
-
-/* This assumes the urb is meant to be generically handled and freed.  */
-static void xpad360wr_dangerous_complete(struct urb *urb)
-{
-	struct device *device = &urb->dev->dev;
-
-	CHECK_URB_STATUS(device, urb)
-
-	xpad360c_destroy_urb(urb);
-}
 
 static void xpad360wr_query_presence(struct xpad360_controller *controller)
 {
@@ -109,12 +101,16 @@ int xpad360wr_rumble(struct input_dev *dev, void *stuff, struct ff_effect *effec
 	} else return -1;
 }
 
-void xpad360wr_register_input(struct xpad360_controller *controller, struct usb_device *usbdev)
+void xpad360wr_register_input(struct xpad360wr_controller *wr_controller, struct usb_device *usbdev)
 {
+	struct xpad360_controller *controller = &wr_controller->xpad;
 	struct input_dev *inputdev;
 	int error = 0;
 	
-	xpad360c_allocate_inputdev(controller, usbdev);
+	xpad360c_allocate_inputdev(
+		controller, usbdev,
+		wr_controller->name,
+		controller->path);
 	
 	if (!controller->inputdev) return;
 
@@ -159,7 +155,7 @@ void xpad360wr_process_packet_work(struct work_struct* work)
 			/* Connection + Headset flag */
 		case 0x80: {
 			xpad360wr_led(&controller->xpad, controller->num_controller + 6);
-			xpad360wr_register_input(&controller->xpad, packet->urb->dev);
+			xpad360wr_register_input(controller, packet->urb->dev);
 			break;
 		}
 
@@ -252,7 +248,8 @@ void xpad360wr_receive(struct urb *urb)
 	struct xpad360wr_controller *controller = urb->context;
 	struct device *device = &urb->dev->dev;
 	
-	CHECK_URB_STATUS(device, urb)
+	if (!xpad360c_check_urb(urb))
+		return;
 	
 	/* The scheduled work will clean the urb up. */
 	controller->packet_work.urb = controller->xpad.in;
@@ -284,7 +281,7 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 	INIT_WORK((struct work_struct *)&controller->packet_work, xpad360wr_process_packet_work);
 	
 	controller->num_controller = (interface->cur_altsetting->desc.bInterfaceNumber + 1) / 2;
-	controller->xpad.name = xpad360wr_device_names[id - xpad360wr_table];
+	controller->name = xpad360wr_device_names[id - xpad360wr_table];
 	
 	{
 		char tmp[8];
@@ -296,18 +293,22 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 		strlcat(path, tmp, size);
 	}
 	
-	xpad360wr_query_presence(&controller->xpad);
+	error = 
+	xpad360c_probe(
+		(struct xpad360_controller*)controller, 
+		interface,
+		xpad360wr_receive,
+		xpad360c_dangerous_complete
+	);
 
-	error = xpad360c_allocate(&controller->xpad, interface);
 	if (error) return error;
-
-	controller->xpad.in->complete = xpad360wr_receive;
-	controller->xpad.out->complete = xpad360wr_dangerous_complete;
 
 	error = usb_submit_urb(controller->xpad.in, GFP_KERNEL);
 	if (unlikely(error)) {
 		goto fail;
 	}
+
+	xpad360wr_query_presence(&controller->xpad);
 
 	goto success;
 	

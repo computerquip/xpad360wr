@@ -13,9 +13,9 @@ static struct usb_device_id xpad360w_table[] = {
 	{}
 };
 
-int xpad360w_rumble(struct input_dev *dev, void* stuff, struct ff_effect *effect)
+static int xpad360w_rumble(struct input_dev *dev, void* stuff, struct ff_effect *effect)
 {
-	struct xpad360_controller *controller = input_get_drvdata(dev);
+	struct xpad360_controller *controller = stuff;
 
 	if (effect->type == FF_RUMBLE) {
 		struct urb *urb = xpad360c_copy_urb(controller->out, GFP_ATOMIC);
@@ -33,24 +33,26 @@ int xpad360w_rumble(struct input_dev *dev, void* stuff, struct ff_effect *effect
 
 		urb->transfer_buffer_length = 8;
 
+		usb_anchor_urb(urb, &controller->out_anchor);
+
 		return !!usb_submit_urb(urb, GFP_ATOMIC);
 	} else return -1;
 }
 
 /* Data must be a buffer with 3 writeable bytes ahead of it!*/
-static void _xpad360w_generate_led_packet(void* buffer, u8 status)
+static void xpad360w_generate_led_packet(void* buffer, u8 status)
 {
 	const u8 packet[3] = { 0x01, 0x03, status };
 	memcpy(buffer, packet, sizeof(packet));
 }
 
-void xpad360w_led_sync(struct xpad360_controller *controller, u8 status) {
+static void xpad360w_led_sync(struct xpad360_controller *controller, u8 status) {
 	struct usb_device *usbdev = controller->out->dev;
 	struct device *device = &usbdev->dev;
 	u8 packet[3];
 	int error = 0;
 	
-	_xpad360w_generate_led_packet(packet, status);
+	xpad360w_generate_led_packet(packet, status);
 	
 	error = 
 	usb_interrupt_msg(
@@ -63,30 +65,34 @@ void xpad360w_led_sync(struct xpad360_controller *controller, u8 status) {
 	}
 }
 
-void xpad360w_led(struct xpad360_controller *controller, u8 status) 
+static void xpad360w_led(struct xpad360_controller *controller, u8 status) 
 {
 	struct urb *urb = xpad360c_copy_urb(controller->out, GFP_ATOMIC);
 	struct device *device = &urb->dev->dev;
 	
-	_xpad360w_generate_led_packet(urb->transfer_buffer, status);
+	xpad360w_generate_led_packet(urb->transfer_buffer, status);
 	urb->transfer_buffer_length = 3;
+
+	usb_anchor_urb(urb, &controller->out_anchor);
 
 	if (unlikely(usb_submit_urb(urb, GFP_ATOMIC) != 0)) {
 		dev_dbg(device, "usb_submit_urb() failed in set_led()!");
 	}
 }
 
-void xpad360w_receive(struct urb* urb) {
+static void xpad360w_receive(struct urb* urb) {
 	struct xpad360_controller *controller = urb->context;
 	struct device *device = &urb->dev->dev;
 	struct input_dev *inputdev = controller->inputdev;
 	u8* data = controller->in->transfer_buffer;
 	u16 header;
 
-	CHECK_URB_STATUS(device, urb)
-	
+	if (!xpad360c_check_urb(urb))
+		return;
+
 	header = le16_to_cpup((__le16*)&data[0]);
 	switch (header) {
+
 	case 0x0301:
 		dev_dbg(device, "Controller LED status: %i\n", data[2]);
 		break;
@@ -97,45 +103,53 @@ void xpad360w_receive(struct urb* urb) {
 		dev_dbg(device, "Attachment attached! We don't support any of them. );");
 		break;
 	case 0x1400:
-		/* Since nothing else can possibly inputdev, no need to lock. */
+		if (!inputdev) {
+			dev_dbg(device, "Attempted to use inputdev while NULL!");
+			break;
+		}
+
 		input_report_abs(inputdev, ABS_HAT0X, !!(data[2] & 0x08) - !!(data[2] & 0x04));
 		input_report_abs(inputdev, ABS_HAT0Y, !!(data[2] & 0x02) - !!(data[2] & 0x01));
-		xpad360c_parse_input(controller->inputdev, &data[2]);
+		xpad360c_parse_input(inputdev, &data[2]);
 		break;
 	default: 
 		dev_dbg(device, "Unknown packet received: "
-				"Header: %#.4x "
-				"Data: %#x",
-				header,
-				(unsigned int)*data
-		);
+				"Header: %#.4x", header);
 		
 	}
-	
+
 	if (unlikely(usb_submit_urb(urb, GFP_ATOMIC) != 0)) {
 		dev_dbg(device, "usb_submit_urb() failed in receive()!");
 	}
 }
 
-static void xpad360w_register_input(struct xpad360_controller *controller, struct usb_device *usbdev)
+static void xpad360w_register_input(
+	struct xpad360_controller *controller,
+	struct usb_device *usbdev,
+	const char *name,
+	const char *path)
 {
 	struct input_dev *inputdev;
 	int error = 0;
-	
-	xpad360c_allocate_inputdev(controller, usbdev);
-	
-	inputdev = controller->inputdev;
 
+	dev_dbg(&usbdev->dev, 
+		"Registering Input:\n"
+		"\tName: %s\n"
+		"\tPath: %s\n",
+		name, path);
+	
+	xpad360c_allocate_inputdev(controller, usbdev, name, path);
+	inputdev = controller->inputdev;
 	if (!inputdev) return;
+
+	/* TODO: Check validity, if bad, remove from feature bit. */
+	input_ff_create_memless(inputdev, controller, xpad360w_rumble);
 
 	/* Wireless specific stuff */
 	input_set_abs_params(inputdev, ABS_HAT0X, -1, 1, 0, 0);
 	input_set_abs_params(inputdev, ABS_HAT0Y, -1, 1, 0, 0);
 	__set_bit(ABS_HAT0X, inputdev->absbit); 
 	__set_bit(ABS_HAT0Y, inputdev->absbit);
-	
-	/* Don't care if this fails... */
-	input_ff_create_memless(inputdev, NULL, xpad360w_rumble);
 
 	error = input_register_device(inputdev);
 
@@ -145,64 +159,78 @@ static void xpad360w_register_input(struct xpad360_controller *controller, struc
 	}
 }
 
-int xpad360w_probe(struct usb_interface *interface, const struct usb_device_id *id)
+static int xpad360w_probe(struct usb_interface *interface, const struct usb_device_id *id)
 {
 	struct usb_device *usbdev = interface_to_usbdev(interface);
-	struct device *device = &usbdev->dev;
 	struct xpad360_controller *controller = 
-		kzalloc(sizeof(struct xpad360_controller), GFP_KERNEL);
+		devm_kzalloc(&usbdev->dev, sizeof(struct xpad360_controller), GFP_KERNEL);
 
 	int error = 0;
-	
-	dev_dbg(device, "Initializing xpad360 wired controller...");
-	
-	usb_make_path(usbdev, controller->path, sizeof(controller->path));
-	strlcat(controller->path, "/input0", sizeof(controller->path));
-	controller->name = xpad360w_device_names[id - xpad360w_table];
-	
-	xpad360w_register_input(controller, usbdev);
-	
-	error = xpad360c_allocate(controller, interface);
-	if (error) goto fail1;
 
-	controller->in->complete = xpad360w_receive;
+	if (!controller)
+		return -ENOMEM;	
+
+	usb_set_intfdata(interface, controller);
+
+	usb_make_path(usbdev, controller->path, sizeof(controller->path));
+
+#if 1
+	dev_dbg(&usbdev->dev, "Device Name: %s\n", xpad360w_device_names[id - xpad360w_table]);
+
+	xpad360w_register_input(
+		controller, usbdev,
+		xpad360w_device_names[id - xpad360w_table],
+		controller->path
+	);
 
 	if (!controller->inputdev) {
 		error = -ENOMEM;
 		goto fail0;
 	}
+#endif
 
-	error = usb_submit_urb(controller->in, GFP_KERNEL);
-	if (unlikely(error)) {
-		goto fail2;
-	}
+#if 1
+	error = 
+	xpad360c_probe(
+		controller, 
+		interface, 
+		xpad360w_receive, 
+		xpad360c_dangerous_complete);
+
+	if (error) goto fail1;
 
 	xpad360w_led(controller, XPAD360_LED_ON_1);
-	
+#endif	
+
 	goto success;
 
-fail2:
-	xpad360c_destroy(controller);
+	
 fail1:
 	input_unregister_device(controller->inputdev);
 fail0:
-	kfree(controller); 
+	devm_kfree(&usbdev->dev, controller); /* Is this needed? */
 success:
 	return error;
 }
 
-void xpad360w_disconnect(struct usb_interface *interface) 
+static void xpad360w_disconnect(struct usb_interface *interface)
 {
 	struct usb_device *usbdev = interface_to_usbdev(interface);
 	struct xpad360_controller *controller = usb_get_intfdata(interface);
 
-	xpad360c_destroy(controller);
-	input_unregister_device(controller->inputdev);
-		
-	if (usbdev->state != USB_STATE_NOTATTACHED )
+#if 1
+	usb_kill_urb(controller->in);	
+	usb_kill_anchored_urbs(&controller->out_anchor);
+
+	if (usbdev->state != USB_STATE_NOTATTACHED)
 		xpad360w_led_sync(controller, XPAD360_LED_ROTATING);
 
-	kfree(controller);
+	xpad360c_destroy(controller);
+#endif
+
+#if 1
+	input_unregister_device(controller->inputdev);
+#endif
 }
 
 static struct usb_driver xpad360w_driver = {
