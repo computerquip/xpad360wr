@@ -16,6 +16,7 @@ static struct usb_device_id xpad360w_table[] = {
 static int xpad360w_rumble(struct input_dev *dev, void* stuff, struct ff_effect *effect)
 {
 	struct xpad360_controller *controller = stuff;
+	int status = -1;
 
 	if (effect->type == FF_RUMBLE) {
 		struct urb *urb = xpad360c_copy_urb(controller->out, GFP_ATOMIC);
@@ -35,8 +36,10 @@ static int xpad360w_rumble(struct input_dev *dev, void* stuff, struct ff_effect 
 
 		usb_anchor_urb(urb, &controller->out_anchor);
 
-		return !!usb_submit_urb(urb, GFP_ATOMIC);
-	} else return -1;
+		status = !!usb_submit_urb(urb, GFP_ATOMIC);
+	}
+	
+	return status;
 }
 
 /* Data must be a buffer with 3 writeable bytes ahead of it!*/
@@ -46,7 +49,8 @@ static void xpad360w_generate_led_packet(void* buffer, u8 status)
 	memcpy(buffer, packet, sizeof(packet));
 }
 
-static void xpad360w_led_sync(struct xpad360_controller *controller, u8 status) {
+static void xpad360w_led_sync(struct xpad360_controller *controller, u8 status) 
+{
 	struct usb_device *usbdev = controller->out->dev;
 	struct device *device = &usbdev->dev;
 	u8 packet[3];
