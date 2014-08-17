@@ -140,10 +140,12 @@ void xpad360c_allocate_inputdev(
 	const char* name,
 	const char* path)
 {
+	struct input_dev * inputdev;
+	
 	if (controller->inputdev)
 		return;
 	
-	struct input_dev * inputdev = devm_input_allocate_device(&usbdev->dev);
+	inputdev = devm_input_allocate_device(&usbdev->dev);
 
 	if (!inputdev) return;
 
@@ -271,10 +273,12 @@ void xpad360c_destroy_urb(struct urb *urb)
 	usb_free_urb(urb);
 }
 
+/*
 static void xpad360c_complete(struct urb* urb)
 {
 	xpad360c_check_urb(urb);
 }
+*/
 
 static void xpad360c_dangerous_complete(struct urb *urb)
 {

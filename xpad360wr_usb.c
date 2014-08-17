@@ -303,18 +303,8 @@ int xpad360wr_probe(struct usb_interface *interface, const struct usb_device_id 
 
 	if (error) return error;
 
-	error = usb_submit_urb(controller->xpad.in, GFP_KERNEL);
-	if (unlikely(error)) {
-		goto fail;
-	}
-
 	xpad360wr_query_presence(&controller->xpad);
 
-	goto success;
-	
-fail:
-	xpad360c_destroy(&controller->xpad);
-success:
 	return error;
 }
 
